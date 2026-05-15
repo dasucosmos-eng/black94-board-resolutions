@@ -14,9 +14,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Black94 - Board Resolution System",
-  description: "Professional Board Resolution Generator by Black94",
-  keywords: ["Black94", "Board Resolution", "Corporate", "Legal"],
+  title: "Black94 - AI Corporate OS",
+  description: "AI-Powered Business Operations Platform by Black94",
+  keywords: ["Black94", "AI Corporate OS", "Board Resolution", "Corporate Management"],
   authors: [{ name: "Black94" }],
   icons: {
     icon: "/black94-logo.png",
@@ -31,7 +31,7 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning className="dark">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
+        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-[#0a0a0a] text-white`}
       >
         {children}
         <Toaster />

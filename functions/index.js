@@ -66,13 +66,18 @@ const aiHandler = onRequest({
       return;
     }
 
-    // --- AI RESOLUTION GENERATION ---
+    // --- AI UNIVERSAL HANDLER (supports type field for routing) ---
     if (req.method === 'POST') {
-      const { description, settings } = req.body || {};
+      const { description, settings, type, messages } = req.body || {};
 
       if (!description || !description.trim()) {
-        res.status(400).json({ error: 'Description is required' });
-        return;
+        // Allow chat type with messages instead of description
+        if (type === 'chat' && messages && messages.length > 0) {
+          // proceed to chat handling below
+        } else {
+          res.status(400).json({ error: 'Description is required' });
+          return;
+        }
       }
 
       const companyName = settings?.companyName || 'Black94';
@@ -84,6 +89,181 @@ const aiHandler = onRequest({
       const district = settings?.district || '';
       const authorityName = settings?.authorityName || '';
       const authorityTitle = settings?.authorityTitle || 'Proprietor';
+
+      // --- CHAT TYPE: AI Business Assistant ---
+      if (type === 'chat') {
+        const chatSystemPrompt = `You are an AI Business Assistant for ${companyName} (${legalName}), a ${constitution} firm with GSTIN ${gstin}, located at ${address}, ${state}. You have deep knowledge of the company's operations, documents, and history. You help with: generating documents, answering questions about company data, drafting contracts and policies, providing compliance guidance, and offering business insights. Be professional, concise, and helpful. If asked to generate a document, write the full document text. If asked a question, answer directly based on the company context provided.`;
+        
+        const chatMessages = messages && messages.length > 0 ? messages : [
+          { role: 'user', content: description }
+        ];
+
+        const aiResponse = await fetch(ZAI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ZAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'glm-4-plus',
+            messages: [
+              { role: 'system', content: chatSystemPrompt },
+              ...chatMessages.map((m) => ({ role: m.role, content: m.content }))
+            ],
+            temperature: 0.4,
+            max_tokens: 4000,
+          }),
+        });
+
+        if (!aiResponse.ok) {
+          const errText = await aiResponse.text();
+          console.error('Chat AI error:', aiResponse.status, errText);
+          res.status(502).json({ error: 'AI temporarily unavailable' });
+          return;
+        }
+
+        const aiData = await aiResponse.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        res.status(200).json({ response: content });
+        return;
+      }
+
+      // --- NDA/CONTRACT/POLICY TYPE ---
+      if (type === 'nda' || type === 'contract' || type === 'policy') {
+        const docType = type === 'nda' ? 'Non-Disclosure Agreement' : type === 'contract' ? 'Contract/Agreement' : 'Company Policy';
+        const docPrompt = `You are a senior corporate lawyer. Generate a complete, professional ${docType} for ${legalName}, a ${constitution} with GSTIN ${gstin}, address: ${address}, ${state}.
+
+Company: ${companyName}
+Legal Entity: ${legalName}
+Constitution: ${constitution}
+${settings?.authorityName ? `Authorized Signatory: ${settings.authorityName} (${settings.authorityTitle || authorityTitle})` : ''}
+
+Request: ${description}
+
+Generate the COMPLETE document with all standard clauses, proper formatting, and legal language. Include: title, parties, recitals/whereas clauses, main terms, obligations, termination, governing law, signatures block. Output the full document text only.`;
+
+        const aiResponse = await fetch(ZAI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ZAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'glm-4-plus',
+            messages: [
+              { role: 'system', content: `You are an expert Indian corporate lawyer. Generate complete, legally sound documents.` },
+              { role: 'user', content: docPrompt }
+            ],
+            temperature: 0.3,
+            max_tokens: 4000,
+          }),
+        });
+
+        const aiData = await aiResponse.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        res.status(200).json({ document: content, title: `${docType} - ${companyName}` });
+        return;
+      }
+
+      // --- COMPLIANCE TYPE ---
+      if (type === 'compliance') {
+        const compliancePrompt = `You are a compliance expert for Indian businesses. Review the compliance status for ${legalName} (${constitution}, GSTIN: ${gstin}).
+
+Company data: ${JSON.stringify(settings || {})}
+
+Review request: ${description}
+
+Provide a detailed compliance analysis with:
+1. Current status assessment
+2. Issues found (if any)
+3. Recommended actions
+4. Upcoming deadlines
+5. Risk level (Low/Medium/High)
+
+Format as clear, actionable text.`;
+
+        const aiResponse = await fetch(ZAI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ZAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'glm-4-plus',
+            messages: [
+              { role: 'system', content: 'You are an Indian business compliance expert.' },
+              { role: 'user', content: compliancePrompt }
+            ],
+            temperature: 0.3,
+            max_tokens: 3000,
+          }),
+        });
+
+        const aiData = await aiResponse.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        res.status(200).json({ analysis: content });
+        return;
+      }
+
+      // --- REPORT TYPE ---
+      if (type === 'report') {
+        const reportPrompt = `Generate a professional business report for ${companyName} (${legalName}), ${constitution}.
+
+Company: ${JSON.stringify(settings || {})}
+
+Report request: ${description}
+
+Write a comprehensive, well-structured report with executive summary, detailed findings, and recommendations. Use professional business language.`;
+
+        const aiResponse = await fetch(ZAI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ZAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'glm-4-plus',
+            messages: [
+              { role: 'system', content: 'You are a business analyst generating professional reports.' },
+              { role: 'user', content: reportPrompt }
+            ],
+            temperature: 0.3,
+            max_tokens: 4000,
+          }),
+        });
+
+        const aiData = await aiResponse.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        res.status(200).json({ report: content });
+        return;
+      }
+
+      // --- CLAUSE ANALYSIS TYPE ---
+      if (type === 'clause-analysis') {
+        const analysisPrompt = `You are a senior contract lawyer. Analyze the following contract text and identify:
+
+1. RISKY CLAUSES (things that could harm ${companyName})
+2. MISSING PROTECTIONS (standard protections absent)
+3. ONE-SIDED TERMS (unfairly favoring the other party)
+4. LIABILITY EXPOSURE (potential financial/legal risks)
+5. IP OWNERSHIP ISSUES
+6. TERMINATION CONCERNS
+7. OVERALL RISK ASSESSMENT (Low/Medium/High)
+
+Contract text to analyze:
+${description}
+
+Provide specific, actionable analysis. Reference exact clauses. Give clear recommendations.`;
+
+        const aiResponse = await fetch(ZAI_API_URL, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${ZAI_API_KEY}` },
+          body: JSON.stringify({
+            model: 'glm-4-plus',
+            messages: [
+              { role: 'system', content: `You are a senior Indian contract lawyer reviewing agreements for ${companyName}.` },
+              { role: 'user', content: analysisPrompt }
+            ],
+            temperature: 0.3,
+            max_tokens: 4000,
+          }),
+        });
+
+        const aiData = await aiResponse.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        res.status(200).json({ analysis: content });
+        return;
+      }
+
+      // --- DEFAULT: BOARD RESOLUTION GENERATION ---
 
       const systemPrompt = `You are a senior corporate lawyer and board secretary with 25+ years of experience drafting Indian Board Resolutions for proprietorship firms registered under GST. Your task is to transform a plain English description into a polished, legally sound board resolution that would be accepted by any bank, government authority, or regulatory body in India.
 
