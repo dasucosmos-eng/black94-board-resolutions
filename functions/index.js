@@ -1,25 +1,33 @@
 import { onRequest } from 'firebase-functions/v2/https';
-import { cors } from 'firebase-functions/v2/https';
 
 const ZAI_API_KEY = 'c5028ebdb86e4a2f8575ff2c70a686cf.Afesd3OL7eL7VHvn';
 const ZAI_API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 
 const aiHandler = onRequest({ region: 'asia-south1' }, async (req, res) => {
-  cors({ origin: true })(req, res, async () => {
-    if (req.method !== 'POST') {
-      res.status(405).send('Method Not Allowed');
+  // CORS handling
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    res.status(204).send('');
+    return;
+  }
+
+  if (req.method !== 'POST') {
+    res.status(405).send('Method Not Allowed');
+    return;
+  }
+
+  try {
+    const { description, settings } = req.body;
+
+    if (!description || !description.trim()) {
+      res.status(400).json({ error: 'Description is required' });
       return;
     }
 
-    try {
-      const { description, settings } = req.body;
-
-      if (!description || !description.trim()) {
-        res.status(400).json({ error: 'Description is required' });
-        return;
-      }
-
-      const systemPrompt = `You are an expert legal document writer specializing in Indian Board Resolutions for proprietorship firms. Convert a plain English description into a professional, legally-formatted board resolution.
+    const systemPrompt = `You are an expert legal document writer specializing in Indian Board Resolutions for proprietorship firms. Convert a plain English description into a professional, legally-formatted board resolution.
 
 COMPANY DETAILS:
 - Company Name: ${settings?.companyName || 'Black94'}
@@ -54,50 +62,49 @@ RULES:
 7. If proposer/seconder names are mentioned, extract them; if not, proposer defaults to authority
 8. Output ONLY raw JSON, no markdown formatting, no code blocks`;
 
-      const aiResponse = await fetch(ZAI_API_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${ZAI_API_KEY}`,
-        },
-        body: JSON.stringify({
-          model: 'glm-4-plus',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: `Draft a professional board resolution from this description:\n\n${description}` }
-          ],
-          temperature: 0.3,
-          max_tokens: 2000,
-        }),
-      });
+    const aiResponse = await fetch(ZAI_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${ZAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'glm-4-plus',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: `Draft a professional board resolution from this description:\n\n${description}` }
+        ],
+        temperature: 0.3,
+        max_tokens: 2000,
+      }),
+    });
 
-      if (!aiResponse.ok) {
-        const errText = await aiResponse.text();
-        console.error('ZhipuAI API error:', aiResponse.status, errText);
-        res.status(502).json({ error: 'AI service error' });
-        return;
-      }
-
-      const aiData = await aiResponse.json();
-      const content = aiData.choices?.[0]?.message?.content || '';
-      const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const parsed = JSON.parse(cleaned);
-
-      res.status(200).json({
-        title: parsed.title || '',
-        preamble: parsed.preamble || '',
-        resolvedText: parsed.resolvedText || '',
-        venue: parsed.venue || `Registered Office, ${settings?.district || ''}`,
-        resolvedBy: parsed.resolvedBy || settings?.authorityName || '',
-        secondedBy: parsed.secondedBy || '',
-        authorityName: parsed.authorityName || settings?.authorityName || '',
-        authorityTitle: parsed.authorityTitle || settings?.authorityTitle || '',
-      });
-    } catch (err) {
-      console.error('AI generation error:', err);
-      res.status(500).json({ error: 'Failed to generate resolution: ' + (err.message || 'Unknown error') });
+    if (!aiResponse.ok) {
+      const errText = await aiResponse.text();
+      console.error('ZhipuAI API error:', aiResponse.status, errText);
+      res.status(502).json({ error: 'AI service error' });
+      return;
     }
-  });
+
+    const aiData = await aiResponse.json();
+    const content = aiData.choices?.[0]?.message?.content || '';
+    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const parsed = JSON.parse(cleaned);
+
+    res.status(200).json({
+      title: parsed.title || '',
+      preamble: parsed.preamble || '',
+      resolvedText: parsed.resolvedText || '',
+      venue: parsed.venue || `Registered Office, ${settings?.district || ''}`,
+      resolvedBy: parsed.resolvedBy || settings?.authorityName || '',
+      secondedBy: parsed.secondedBy || '',
+      authorityName: parsed.authorityName || settings?.authorityName || '',
+      authorityTitle: parsed.authorityTitle || settings?.authorityTitle || '',
+    });
+  } catch (err) {
+    console.error('AI generation error:', err);
+    res.status(500).json({ error: 'Failed to generate resolution: ' + (err.message || 'Unknown error') });
+  }
 });
 
 export { aiHandler };

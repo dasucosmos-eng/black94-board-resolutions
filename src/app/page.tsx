@@ -138,7 +138,7 @@ interface ParsedResolution {
 }
 
 async function aiGenerateResolution(input: string, settings: CompanySettings): Promise<ParsedResolution> {
-  const cloudFunctionUrl = 'https://asia-south1-black94-board-resolutions.cloudfunctions.net/aiHandler';
+  const cloudFunctionUrl = 'https://aihandler-pjfzlcns3a-el.a.run.app';
 
   try {
     const response = await fetch(cloudFunctionUrl, {
@@ -647,10 +647,20 @@ export default function BoardResolutionApp() {
     try {
       const html2canvas = (await import('html2canvas-pro')).default;
       const { jsPDF } = await import('jspdf');
-      // A4: 210mm x 297mm. At 96dpi: 794px x 1123px. We use 2x for quality: 1588x2246
       const a4WidthPx = 794;
       const a4HeightPx = 1123;
-      const canvas = await html2canvas(previewRef.current, {
+
+      // Create a hidden clone at full size (no CSS transform scaling) for accurate capture
+      const clone = previewRef.current.cloneNode(true) as HTMLElement;
+      clone.style.position = 'fixed';
+      clone.style.left = '-9999px';
+      clone.style.top = '0';
+      clone.style.width = `${a4WidthPx}px`;
+      clone.style.transform = 'none';
+      clone.style.zIndex = '-1';
+      document.body.appendChild(clone);
+
+      const canvas = await html2canvas(clone, {
         scale: 2,
         useCORS: true,
         allowTaint: true,
@@ -659,12 +669,51 @@ export default function BoardResolutionApp() {
         width: a4WidthPx,
         windowWidth: a4WidthPx,
       });
+
+      document.body.removeChild(clone);
+
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm
       const pdfHeight = pdf.internal.pageSize.getHeight(); // 297mm
-      // Map the HTML canvas to fill the full A4 page
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+
+      // Calculate proper dimensions maintaining aspect ratio
+      const canvasWidth = canvas.width;  // pixel width at 2x scale
+      const canvasHeight = canvas.height;
+      const imgWidthMM = pdfWidth;  // always full page width
+      const imgHeightMM = (canvasHeight / canvasWidth) * imgWidthMM;
+
+      // If content fits in one page, center it; otherwise paginate
+      if (imgHeightMM <= pdfHeight) {
+        // Center vertically if shorter than page
+        const yOffset = Math.max(0, (pdfHeight - imgHeightMM) / 2);
+        pdf.addImage(imgData, 'PNG', 0, yOffset, imgWidthMM, imgHeightMM);
+      } else {
+        // Multi-page: slice the canvas image into A4-sized chunks
+        const sourcePageHeightPx = (a4HeightPx / a4WidthPx) * canvasWidth;
+        let remainingHeight = canvasHeight;
+        let sourceY = 0;
+        let pageNum = 0;
+        while (remainingHeight > 0) {
+          if (pageNum > 0) pdf.addPage();
+          const sliceHeight = Math.min(sourcePageHeightPx, remainingHeight);
+          // Create a sub-canvas for this page slice
+          const pageCanvas = document.createElement('canvas');
+          pageCanvas.width = canvasWidth;
+          pageCanvas.height = sliceHeight;
+          const ctx = pageCanvas.getContext('2d');
+          if (ctx) {
+            ctx.drawImage(canvas, 0, sourceY, canvasWidth, sliceHeight, 0, 0, canvasWidth, sliceHeight);
+            const sliceData = pageCanvas.toDataURL('image/png');
+            const sliceHeightMM = (sliceHeight / canvasWidth) * imgWidthMM;
+            pdf.addImage(sliceData, 'PNG', 0, 0, imgWidthMM, sliceHeightMM);
+          }
+          remainingHeight -= sliceHeight;
+          sourceY += sliceHeight;
+          pageNum++;
+        }
+      }
+
       pdf.save(resolution ? `Board_Resolution_${resolution.resolutionNumber}.pdf` : 'Board_Resolution.pdf');
       toast.success('PDF generated successfully');
     } catch (err) {
@@ -1332,57 +1381,53 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         overflow: 'hidden',
       }}
     >
+      {/* Black Header Banner */}
       <div style={{
-        position: 'absolute',
-        top: 0, left: 0, right: 0,
-        height: '4px',
-        background: 'linear-gradient(90deg, #111111 0%, #333333 30%, #111111 60%, #333333 100%)',
-      }} />
-
-      <div style={{
+        background: '#111111',
+        padding: '18px 0',
+        marginBottom: '0',
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         justifyContent: 'space-between',
-        paddingBottom: '14px',
-        marginBottom: '16px',
-        borderBottom: '2px solid #1a1a1a',
+        position: 'relative',
       }}>
-        <div style={{ flexShrink: 0, marginRight: '20px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <img
             src="/black94-logo.png"
             alt={companyName}
-            style={{ height: '52px', width: 'auto', objectFit: 'contain' }}
+            style={{ height: '60px', width: '60px', objectFit: 'contain', borderRadius: '8px' }}
           />
-        </div>
-
-        <div style={{ textAlign: 'right', flex: 1 }}>
-          <h1 style={{
-            fontSize: '18px',
-            fontWeight: 'bold',
-            textTransform: 'uppercase',
-            letterSpacing: '2px',
-            color: '#111111',
-            margin: 0,
-            lineHeight: '1.3',
-          }}>
-            {companyName}
-          </h1>
-          {legalName && (
-            <p style={{
-              fontSize: '9px',
-              color: '#555555',
-              fontStyle: 'italic',
-              margin: '2px 0 0 0',
-              letterSpacing: '0.5px',
+          <div>
+            <h1 style={{
+              fontSize: '20px',
+              fontWeight: 'bold',
+              textTransform: 'uppercase',
+              letterSpacing: '3px',
+              color: '#ffffff',
+              margin: 0,
+              lineHeight: '1.2',
             }}>
-              {legalName} ({constitution})
-            </p>
-          )}
+              {companyName}
+            </h1>
+            {legalName && (
+              <p style={{
+                fontSize: '9px',
+                color: '#aaaaaa',
+                fontStyle: 'italic',
+                margin: '3px 0 0 0',
+                letterSpacing: '0.5px',
+              }}>
+                {legalName} ({constitution})
+              </p>
+            )}
+          </div>
+        </div>
+        <div style={{ textAlign: 'right' }}>
           {gstin && (
             <p style={{
               fontSize: '9px',
-              color: '#555555',
-              margin: '1px 0 0 0',
+              color: '#cccccc',
+              margin: '0 0 2px 0',
               letterSpacing: '0.5px',
             }}>
               GSTIN: {gstin}
@@ -1391,16 +1436,25 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
           {address && (
             <p style={{
               fontSize: '8px',
-              color: '#666666',
-              margin: '2px 0 0 0',
+              color: '#999999',
+              margin: 0,
               lineHeight: '1.4',
-              maxWidth: '380px',
-              marginLeft: 'auto',
+              maxWidth: '340px',
+              textAlign: 'right',
             }}>
               {address}
             </p>
           )}
         </div>
+        {/* Gold accent line */}
+        <div style={{
+          position: 'absolute',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          height: '3px',
+          background: 'linear-gradient(90deg, #c9a84c 0%, #e8d48b 40%, #c9a84c 60%, #e8d48b 100%)',
+        }} />
       </div>
 
       <div style={{ textAlign: 'center', margin: '24px 0 28px 0' }}>
@@ -1526,19 +1580,19 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         alignItems: 'flex-end',
         justifyContent: 'space-between',
       }}>
-        <div style={{ textAlign: 'center', minWidth: '220px' }}>
+        <div style={{ textAlign: 'center', minWidth: '280px' }}>
           {signaturePreview && (
-            <div style={{ marginBottom: '4px' }}>
+            <div style={{ marginBottom: '6px', minHeight: '80px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
               <img
                 src={signaturePreview}
                 alt="Authorized Signature"
-                style={{ height: '48px', width: 'auto', margin: '0 auto', objectFit: 'contain' }}
+                style={{ height: '80px', maxWidth: '240px', width: 'auto', objectFit: 'contain' }}
               />
             </div>
           )}
-          <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: '6px' }}>
+          <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: '8px' }}>
             <p style={{
-              fontSize: '11px',
+              fontSize: '12px',
               fontWeight: 'bold',
               color: '#111111',
               margin: 0,
@@ -1546,14 +1600,14 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
               {form.authorityName || settingsForm.authorityName || '___________________________'}
             </p>
             <p style={{
-              fontSize: '9px',
+              fontSize: '10px',
               color: '#555555',
-              margin: '2px 0 0 0',
+              margin: '3px 0 0 0',
             }}>
               {form.authorityTitle || settingsForm.authorityTitle || 'Authorized Signatory'}
             </p>
             <p style={{
-              fontSize: '9px',
+              fontSize: '10px',
               color: '#555555',
               margin: '1px 0 0 0',
             }}>
@@ -1562,16 +1616,16 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
           </div>
         </div>
 
-        <div style={{ position: 'relative', width: '120px', height: '120px', flexShrink: 0 }}>
+        <div style={{ position: 'relative', width: '130px', height: '130px', flexShrink: 0 }}>
           {stampPreview && (
             <img
               src={stampPreview}
               alt="Company Stamp"
               style={{
                 position: 'absolute',
-                top: '-20px',
-                right: '-20px',
-                height: '100px',
+                top: '-25px',
+                right: '-25px',
+                height: '110px',
                 width: 'auto',
                 objectFit: 'contain',
                 opacity: 0.75,
@@ -1605,7 +1659,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         position: 'absolute',
         bottom: 0, left: 0, right: 0,
         height: '3px',
-        background: 'linear-gradient(90deg, #111111 0%, #333333 30%, #111111 60%, #333333 100%)',
+        background: 'linear-gradient(90deg, #c9a84c 0%, #e8d48b 40%, #c9a84c 60%, #e8d48b 100%)',
       }} />
     </div>
   );

@@ -5,6 +5,6 @@
   "main": "index.js",
   "type": "module",
   "dependencies": {
-    "firebase-functions": "^6.0.0"
+    "firebase-functions": "^7.2.5"
   }
 }
