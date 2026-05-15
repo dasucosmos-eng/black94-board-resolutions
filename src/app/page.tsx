@@ -16,6 +16,10 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+// --- Constants ---
+const CLOUD_FUNCTION_URL = 'https://aihandler-pjfzlcns3a-el.a.run.app';
+const SYNC_DEBOUNCE_MS = 1500;
+
 // --- LocalStorage Helpers ---
 function getFromStorage<T>(key: string, fallback: T): T {
   if (typeof window === 'undefined') return fallback;
@@ -38,6 +42,30 @@ function setToStorage<T>(key: string, value: T): void {
 
 function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
+}
+
+// --- Cloud Sync Helper ---
+async function cloudSyncPush(data: { resolutions: BoardResolution[]; settings: CompanySettings; signature: string | null; stamp: string | null }) {
+  try {
+    await fetch(`${CLOUD_FUNCTION_URL}/data`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+  } catch (e) {
+    console.warn('Cloud sync push failed:', e);
+  }
+}
+
+async function cloudSyncPull(): Promise<{ resolutions: BoardResolution[]; settings: CompanySettings; signature: string | null; stamp: string | null } | null> {
+  try {
+    const res = await fetch(`${CLOUD_FUNCTION_URL}/data`);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch (e) {
+    console.warn('Cloud sync pull failed:', e);
+    return null;
+  }
 }
 
 // --- Types ---
@@ -138,10 +166,8 @@ interface ParsedResolution {
 }
 
 async function aiGenerateResolution(input: string, settings: CompanySettings): Promise<ParsedResolution> {
-  const cloudFunctionUrl = 'https://aihandler-pjfzlcns3a-el.a.run.app';
-
   try {
-    const response = await fetch(cloudFunctionUrl, {
+    const response = await fetch(`${CLOUD_FUNCTION_URL}/`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description: input, settings }),
@@ -438,12 +464,23 @@ export default function BoardResolutionApp() {
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [stampPreview, setStampPreview] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<'signature' | 'stamp' | null>(null);
+  const syncTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   const signatureInputRef = useRef<HTMLInputElement>(null);
   const stampInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  // Auth check + load data
+  // Debounced cloud sync push
+  const scheduleCloudSync = useCallback((resolutionsList: BoardResolution[], currentSettings: CompanySettings, sig: string | null, stmp: string | null) => {
+    if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    syncTimerRef.current = setTimeout(() => {
+      cloudSyncPush({ resolutions: resolutionsList, settings: currentSettings, signature: sig, stamp: stmp });
+      setSyncing(false);
+    }, SYNC_DEBOUNCE_MS);
+  }, []);
+
+  // Auth check + load data (localStorage first, then cloud sync)
   useEffect(() => {
     const auth = getFromStorage<{ authenticated: boolean; timestamp: number } | null>('black94_auth', null);
     if (auth && auth.authenticated) {
@@ -467,6 +504,34 @@ export default function BoardResolutionApp() {
     // Auto-set resolution number
     const nextNum = generateResolutionNumber(savedResolutions);
     setForm(prev => ({ ...prev, resolutionNumber: nextNum, authorityName: mergedSettings.authorityName, authorityTitle: mergedSettings.authorityTitle }));
+
+    // Pull from cloud and merge (cloud wins if newer)
+    cloudSyncPull().then(cloudData => {
+      if (cloudData && cloudData.resolutions && cloudData.resolutions.length > 0) {
+        // Merge: combine local and cloud resolutions, deduplicate by ID
+        const localIds = new Set(savedResolutions.map(r => r.id));
+        const newFromCloud = cloudData.resolutions.filter(r => !localIds.has(r.id));
+        if (newFromCloud.length > 0) {
+          const merged = [...newFromCloud, ...savedResolutions].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+          setResolutions(merged);
+          setToStorage('black94_resolutions', merged);
+        }
+      }
+      if (cloudData?.settings) {
+        const mergedS = { ...DEFAULT_SETTINGS, ...cloudData.settings };
+        setSettings(mergedS);
+        setSettingsForm(mergedS);
+        setToStorage('black94_settings', mergedS);
+      }
+      if (cloudData?.signature && !savedSignature) {
+        setSignaturePreview(cloudData.signature);
+        setToStorage('black94_signature', cloudData.signature);
+      }
+      if (cloudData?.stamp && !savedStamp) {
+        setStampPreview(cloudData.stamp);
+        setToStorage('black94_stamp', cloudData.stamp);
+      }
+    });
 
     setLoading(false);
   }, []);
@@ -589,6 +654,8 @@ export default function BoardResolutionApp() {
       const updated = [newResolution, ...resolutions];
       setResolutions(updated);
       setToStorage('black94_resolutions', updated);
+      // Sync to cloud
+      cloudSyncPush({ resolutions: updated, settings: settingsForm, signature: signaturePreview, stamp: stampPreview });
       toast.success('Board Resolution created successfully');
 
       const nextNum = generateResolutionNumber(updated);
@@ -615,6 +682,7 @@ export default function BoardResolutionApp() {
     const updated = resolutions.filter((r) => r.id !== id);
     setResolutions(updated);
     setToStorage('black94_resolutions', updated);
+    cloudSyncPush({ resolutions: updated, settings: settingsForm, signature: signaturePreview, stamp: stampPreview });
     toast.success('Resolution deleted');
   };
 
@@ -637,7 +705,18 @@ export default function BoardResolutionApp() {
     e.preventDefault();
     setDragOver(null);
     const file = e.dataTransfer.files[0];
-    if (file) { if (type === 'signature') handleSignatureUpload(file); else handleStampUpload(file); }
+    if (file) {
+      if (type === 'signature') {
+        handleSignatureUpload(file).then(() => {
+          // Sync to cloud after signature upload
+          cloudSyncPush({ resolutions, settings: settingsForm, signature: signaturePreview, stamp: stampPreview });
+        });
+      } else {
+        handleStampUpload(file).then(() => {
+          cloudSyncPush({ resolutions, settings: settingsForm, signature: signaturePreview, stamp: stampPreview });
+        });
+      }
+    }
   };
 
   // PDF Generation
@@ -1370,36 +1449,34 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
     <div
       ref={ref}
       style={{
-        width: '794px',       /* A4 at 96dpi */
-        minHeight: '1123px',   /* A4 at 96dpi */
+        width: '794px',
+        minHeight: '1123px',
         background: '#ffffff',
-        fontFamily: "'Georgia', 'Times New Roman', serif",
+        fontFamily: "'Georgia', 'Times New Roman', 'Palatino Linotype', serif",
         color: '#1a1a1a',
-        padding: '36px 56px 24px 56px',
         boxSizing: 'border-box',
         position: 'relative',
         overflow: 'hidden',
       }}
     >
-      {/* Black Header Banner */}
+      {/* Deep Black Header */}
       <div style={{
-        background: '#111111',
-        padding: '18px 0',
-        marginBottom: '0',
+        background: '#0a0a0a',
+        padding: '20px 56px',
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         position: 'relative',
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '18px' }}>
           <img
             src="/black94-logo.png"
             alt={companyName}
-            style={{ height: '60px', width: '60px', objectFit: 'contain', borderRadius: '8px' }}
+            style={{ height: '56px', width: '56px', objectFit: 'contain', borderRadius: '6px' }}
           />
           <div>
             <h1 style={{
-              fontSize: '20px',
+              fontSize: '22px',
               fontWeight: 'bold',
               textTransform: 'uppercase',
               letterSpacing: '3px',
@@ -1411,8 +1488,8 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
             </h1>
             {legalName && (
               <p style={{
-                fontSize: '9px',
-                color: '#aaaaaa',
+                fontSize: '9.5px',
+                color: '#888888',
                 fontStyle: 'italic',
                 margin: '3px 0 0 0',
                 letterSpacing: '0.5px',
@@ -1426,7 +1503,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
           {gstin && (
             <p style={{
               fontSize: '9px',
-              color: '#cccccc',
+              color: '#bbbbbb',
               margin: '0 0 2px 0',
               letterSpacing: '0.5px',
             }}>
@@ -1439,7 +1516,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
               color: '#999999',
               margin: 0,
               lineHeight: '1.4',
-              maxWidth: '340px',
+              maxWidth: '320px',
               textAlign: 'right',
             }}>
               {address}
@@ -1453,170 +1530,176 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
           left: 0,
           right: 0,
           height: '3px',
-          background: 'linear-gradient(90deg, #c9a84c 0%, #e8d48b 40%, #c9a84c 60%, #e8d48b 100%)',
+          background: 'linear-gradient(90deg, #b8941f 0%, #d4b84a 30%, #f0d678 50%, #d4b84a 70%, #b8941f 100%)',
         }} />
       </div>
 
-      {/* Title is in the black header now — no separate title needed */}
-
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'flex-start',
-        marginBottom: '14px',
-        padding: '8px 0',
-        borderTop: '1px solid #e0e0e0',
-        borderBottom: '1px solid #e0e0e0',
-      }}>
-        <div>
-          <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Resolution No</span>
-          <p style={{ fontSize: '12px', fontFamily: "'Courier New', monospace", fontWeight: 'bold', color: '#111111', margin: '2px 0 0 0' }}>{form.resolutionNumber}</p>
-        </div>
-        <div style={{ textAlign: 'center' }}>
-          {form.venue && (
-            <>
-              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Venue</span>
-              <p style={{ fontSize: '11px', color: '#333333', margin: '2px 0 0 0' }}>{form.venue}</p>
-            </>
-          )}
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Date</span>
-          <p style={{ fontSize: '11px', color: '#333333', margin: '2px 0 0 0' }}>{formattedDate}</p>
-        </div>
-      </div>
-
-      {form.preamble && (
-        <div style={{ marginBottom: '14px' }}>
-          <p style={{
-            fontSize: '10.5px',
-            lineHeight: '1.6',
-            color: '#444444',
-            fontStyle: 'italic',
-            textAlign: 'justify',
-            margin: 0,
-          }}>
-            {form.preamble}
-          </p>
-        </div>
-      )}
-
-      <div style={{ marginBottom: '16px' }}>
-        <p style={{
-          fontSize: '10.5px',
-          fontWeight: 'bold',
-          color: '#111111',
-          margin: '0 0 6px 0',
-          textTransform: 'uppercase',
-          letterSpacing: '1px',
-        }}>
-          Resolved That
-        </p>
-        <div style={{
-          fontSize: '10.5px',
-          lineHeight: '1.65',
-          color: '#222222',
-          textAlign: 'justify',
-          paddingLeft: '16px',
-          borderLeft: '3px solid #1a1a1a',
-        }}>
-          <p style={{ margin: 0 }}>{form.resolvedText}</p>
-        </div>
-      </div>
-
-      {(form.resolvedBy || form.secondedBy) && (
+      {/* Body Content */}
+      <div style={{ padding: '32px 56px 24px 56px' }}>
+        {/* Resolution Metadata Bar */}
         <div style={{
           display: 'flex',
-          gap: '48px',
-          marginBottom: '20px',
+          justifyContent: 'space-between',
+          alignItems: 'flex-start',
+          marginBottom: '18px',
+          padding: '10px 0',
+          borderTop: '1px solid #e0e0e0',
+          borderBottom: '1px solid #e0e0e0',
         }}>
-          {form.resolvedBy && (
-            <div>
-              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Proposed By</span>
-              <p style={{ fontSize: '11px', color: '#111111', margin: '2px 0 0 0', fontWeight: '500' }}>{form.resolvedBy}</p>
-            </div>
-          )}
-          {form.secondedBy && (
-            <div>
-              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Seconded By</span>
-              <p style={{ fontSize: '11px', color: '#111111', margin: '2px 0 0 0', fontWeight: '500' }}>{form.secondedBy}</p>
-            </div>
-          )}
-        </div>
-      )}
-
-      <div style={{ borderTop: '1px solid #d0d0d0', margin: '12px 0 0 0' }} />
-
-      <div style={{
-        position: 'relative',
-        marginTop: '40px',
-        display: 'flex',
-        alignItems: 'flex-end',
-        justifyContent: 'space-between',
-      }}>
-        <div style={{ textAlign: 'center', minWidth: '280px' }}>
-          {signaturePreview && (
-            <div style={{ marginBottom: '6px', minHeight: '80px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
-              <img
-                src={signaturePreview}
-                alt="Authorized Signature"
-                style={{ height: '80px', maxWidth: '240px', width: 'auto', objectFit: 'contain' }}
-              />
-            </div>
-          )}
-          <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: '8px' }}>
-            <p style={{
-              fontSize: '12px',
-              fontWeight: 'bold',
-              color: '#111111',
-              margin: 0,
-            }}>
-              {form.authorityName || settingsForm.authorityName || '___________________________'}
-            </p>
-            <p style={{
-              fontSize: '10px',
-              color: '#555555',
-              margin: '3px 0 0 0',
-            }}>
-              {form.authorityTitle || settingsForm.authorityTitle || 'Authorized Signatory'}
-            </p>
-            <p style={{
-              fontSize: '10px',
-              color: '#555555',
-              margin: '1px 0 0 0',
-            }}>
-              {companyName}
-            </p>
+          <div>
+            <span style={{ fontSize: '8px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#999999', fontWeight: 'bold' }}>Resolution No</span>
+            <p style={{ fontSize: '11px', fontFamily: "'Courier New', monospace", fontWeight: 'bold', color: '#1a1a1a', margin: '2px 0 0 0' }}>{form.resolutionNumber}</p>
+          </div>
+          <div style={{ textAlign: 'center' }}>
+            {form.venue && (
+              <>
+                <span style={{ fontSize: '8px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#999999', fontWeight: 'bold' }}>Venue</span>
+                <p style={{ fontSize: '10px', color: '#333333', margin: '2px 0 0 0' }}>{form.venue}</p>
+              </>
+            )}
+          </div>
+          <div style={{ textAlign: 'right' }}>
+            <span style={{ fontSize: '8px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#999999', fontWeight: 'bold' }}>Date</span>
+            <p style={{ fontSize: '10px', color: '#333333', margin: '2px 0 0 0' }}>{formattedDate}</p>
           </div>
         </div>
 
-        <div style={{ position: 'relative', width: '130px', height: '130px', flexShrink: 0 }}>
-          {stampPreview && (
-            <img
-              src={stampPreview}
-              alt="Company Stamp"
-              style={{
-                position: 'absolute',
-                top: '-25px',
-                right: '-25px',
-                height: '110px',
-                width: 'auto',
-                objectFit: 'contain',
-                opacity: 0.75,
-                transform: 'rotate(-12deg)',
-              }}
-            />
-          )}
+        {/* Title */}
+        <div style={{ textAlign: 'center', marginBottom: '18px' }}>
+          <p style={{
+            fontSize: '14px',
+            fontWeight: 'bold',
+            color: '#1a1a1a',
+            margin: 0,
+            lineHeight: '1.4',
+            textTransform: 'capitalize',
+          }}>
+            {form.title || 'Board Resolution'}
+          </p>
+        </div>
+
+        {/* Preamble */}
+        {form.preamble && (
+          <div style={{ marginBottom: '16px' }}>
+            <p style={{
+              fontSize: '10.5px',
+              lineHeight: '1.7',
+              color: '#333333',
+              fontStyle: 'italic',
+              textAlign: 'justify',
+              margin: 0,
+            }}>
+              {form.preamble}
+            </p>
+          </div>
+        )}
+
+        {/* Resolved Text */}
+        <div style={{ marginBottom: '20px' }}>
+          <div style={{
+            fontSize: '10.5px',
+            lineHeight: '1.7',
+            color: '#222222',
+            textAlign: 'justify',
+          }}>
+            <p style={{ margin: 0 }}>{form.resolvedText}</p>
+          </div>
+        </div>
+
+        {/* Proposed / Seconded By */}
+        {(form.resolvedBy || form.secondedBy) && (
+          <div style={{
+            display: 'flex',
+            gap: '48px',
+            marginBottom: '24px',
+          }}>
+            {form.resolvedBy && (
+              <div>
+                <span style={{ fontSize: '8px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#999999', fontWeight: 'bold' }}>Proposed By</span>
+                <p style={{ fontSize: '10px', color: '#1a1a1a', margin: '2px 0 0 0', fontWeight: '600' }}>{form.resolvedBy}</p>
+              </div>
+            )}
+            {form.secondedBy && (
+              <div>
+                <span style={{ fontSize: '8px', textTransform: 'uppercase', letterSpacing: '1.5px', color: '#999999', fontWeight: 'bold' }}>Seconded By</span>
+                <p style={{ fontSize: '10px', color: '#1a1a1a', margin: '2px 0 0 0', fontWeight: '600' }}>{form.secondedBy}</p>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ borderTop: '1px solid #d0d0d0', margin: '8px 0 0 0' }} />
+
+        {/* Signature Block */}
+        <div style={{
+          marginTop: '48px',
+          display: 'flex',
+          alignItems: 'flex-end',
+          justifyContent: 'space-between',
+        }}>
+          <div style={{ textAlign: 'center', minWidth: '260px' }}>
+            {signaturePreview && (
+              <div style={{ marginBottom: '6px', minHeight: '70px', display: 'flex', alignItems: 'flex-end', justifyContent: 'center' }}>
+                <img
+                  src={signaturePreview}
+                  alt="Authorized Signature"
+                  style={{ height: '70px', maxWidth: '220px', width: 'auto', objectFit: 'contain' }}
+                />
+              </div>
+            )}
+            <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: '8px' }}>
+              <p style={{
+                fontSize: '11px',
+                fontWeight: 'bold',
+                color: '#1a1a1a',
+                margin: 0,
+              }}>
+                {form.authorityName || settingsForm.authorityName || '___________________________'}
+              </p>
+              <p style={{
+                fontSize: '9px',
+                color: '#555555',
+                margin: '2px 0 0 0',
+              }}>
+                {form.authorityTitle || settingsForm.authorityTitle || 'Authorized Signatory'}
+              </p>
+              <p style={{
+                fontSize: '9px',
+                color: '#555555',
+                margin: '1px 0 0 0',
+              }}>
+                {companyName}
+              </p>
+            </div>
+          </div>
+
+          <div style={{ position: 'relative', width: '120px', height: '120px', flexShrink: 0 }}>
+            {stampPreview && (
+              <img
+                src={stampPreview}
+                alt="Company Stamp"
+                style={{
+                  position: 'absolute',
+                  top: '-20px',
+                  right: '-20px',
+                  height: '100px',
+                  width: 'auto',
+                  objectFit: 'contain',
+                  opacity: 0.75,
+                  transform: 'rotate(-12deg)',
+                }}
+              />
+            )}
+          </div>
         </div>
       </div>
 
-
-
+      {/* Bottom gold bar */}
       <div style={{
         position: 'absolute',
         bottom: 0, left: 0, right: 0,
         height: '3px',
-        background: 'linear-gradient(90deg, #c9a84c 0%, #e8d48b 40%, #c9a84c 60%, #e8d48b 100%)',
+        background: 'linear-gradient(90deg, #b8941f 0%, #d4b84a 30%, #f0d678 50%, #d4b84a 70%, #b8941f 100%)',
       }} />
     </div>
   );

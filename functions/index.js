@@ -1,12 +1,46 @@
 import { onRequest } from 'firebase-functions/v2/https';
+import { getStorage } from 'firebase-admin/storage';
+import { initializeApp, getApps } from 'firebase-admin/app';
+
+// Initialize Firebase Admin (uses default service account credentials in Cloud Functions)
+if (!getApps().length) {
+  initializeApp();
+}
 
 const ZAI_API_KEY = 'c5028ebdb86e4a2f8575ff2c70a686cf.Afesd3OL7eL7VHvn';
 const ZAI_API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
+const BUCKET_NAME = 'black94-board-resolutions.appspot.com';
+const DATA_FILE = 'resolutions_data.json';
 
-const aiHandler = onRequest({ region: 'asia-south1' }, async (req, res) => {
+// Helper: read data from Cloud Storage
+async function readData() {
+  try {
+    const bucket = getStorage().bucket(BUCKET_NAME);
+    const file = bucket.file(DATA_FILE);
+    const [exists] = await file.exists();
+    if (!exists) return { resolutions: [], settings: null, signature: null, stamp: null };
+    const [content] = await file.download();
+    return JSON.parse(content.toString());
+  } catch (err) {
+    console.error('Read data error:', err);
+    return { resolutions: [], settings: null, signature: null, stamp: null };
+  }
+}
+
+// Helper: write data to Cloud Storage
+async function writeData(data) {
+  const bucket = getStorage().bucket(BUCKET_NAME);
+  const file = bucket.file(DATA_FILE);
+  await file.save(JSON.stringify(data), { contentType: 'application/json', resumable: false });
+}
+
+const aiHandler = onRequest({
+  region: 'asia-south1',
+  invoker: 'public',
+}, async (req, res) => {
   // CORS handling
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') {
@@ -14,96 +48,171 @@ const aiHandler = onRequest({ region: 'asia-south1' }, async (req, res) => {
     return;
   }
 
-  if (req.method !== 'POST') {
-    res.status(405).send('Method Not Allowed');
-    return;
-  }
-
   try {
-    const { description, settings } = req.body;
+    const urlPath = req.path || '';
 
-    if (!description || !description.trim()) {
-      res.status(400).json({ error: 'Description is required' });
+    // --- DATA STORAGE: Load all data ---
+    if (req.method === 'GET' && (urlPath === '/data' || urlPath === '/data/')) {
+      const data = await readData();
+      res.status(200).json(data);
       return;
     }
 
-    const systemPrompt = `You are an expert legal document writer specializing in Indian Board Resolutions for proprietorship firms. Convert a plain English description into a professional, legally-formatted board resolution.
+    // --- DATA STORAGE: Save all data ---
+    if (req.method === 'PUT' && (urlPath === '/data' || urlPath === '/data/')) {
+      const data = req.body;
+      await writeData(data);
+      res.status(200).json({ success: true });
+      return;
+    }
 
-COMPANY DETAILS:
-- Company Name: ${settings?.companyName || 'Black94'}
-- Legal Name: ${settings?.legalName || ''}
-- Constitution: ${settings?.constitution || 'Proprietorship'}
-- GSTIN: ${settings?.gstin || ''}
-- Address: ${settings?.address || ''}
-- State: ${settings?.state || ''}
-- District: ${settings?.district || ''}
-- Authority/Proprietor: ${settings?.authorityName || ''}
-- Designation: ${settings?.authorityTitle || ''}
+    // --- AI RESOLUTION GENERATION ---
+    if (req.method === 'POST') {
+      const { description, settings } = req.body || {};
 
-You MUST respond with ONLY valid JSON (no markdown, no code blocks, no extra text). The JSON must have exactly these fields:
+      if (!description || !description.trim()) {
+        res.status(400).json({ error: 'Description is required' });
+        return;
+      }
+
+      const companyName = settings?.companyName || 'Black94';
+      const legalName = settings?.legalName || 'PRABHU DASU PALLI';
+      const constitution = settings?.constitution || 'Proprietorship';
+      const gstin = settings?.gstin || '37DFRPP8787L1Z0';
+      const address = settings?.address || '';
+      const state = settings?.state || '';
+      const district = settings?.district || '';
+      const authorityName = settings?.authorityName || '';
+      const authorityTitle = settings?.authorityTitle || 'Proprietor';
+
+      const systemPrompt = `You are a senior corporate lawyer and board secretary with 25+ years of experience drafting Indian Board Resolutions for proprietorship firms registered under GST. Your task is to transform a plain English description into a polished, legally sound board resolution that would be accepted by any bank, government authority, or regulatory body in India.
+
+═══ COMPANY PROFILE (STRICTLY USE THESE DETAILS) ═══
+Company/Brand Name: ${companyName}
+Legal Entity Name: ${legalName}
+Constitution: ${constitution}
+GSTIN: ${gstin}
+Registered Address: ${address}
+State: ${state}
+District: ${district}
+Authorized Signatory: ${authorityName}
+Designation: ${authorityTitle}
+
+═══ CRITICAL INSTRUCTIONS ═══
+
+1. DEEP UNDERSTANDING: Read the user's description carefully. Understand the INTENT behind the request, not just the words. A user saying "open bank account" means they need a resolution authorizing the proprietor to open AND operate a bank account with specific banking powers.
+
+2. INDIAN LEGAL COMPLIANCE: Every resolution must comply with:
+   - Indian Companies Act principles (as applicable to proprietorship)
+   - GST regulations
+   - RBI guidelines for banking resolutions
+   - Relevant state government requirements
+
+3. COMPANY IDENTITY:
+   - ALWAYS use "${legalName}" as the entity name in the preamble and resolved text
+   - Reference "${constitution}" nature of business
+   - Use the GSTIN "${gstin}" where relevant for tax-related resolutions
+   - Address at "${address}"
+
+4. RESOLUTION ANATOMY - Generate a COMPLETE, PROFESSIONAL resolution:
+
+   a) TITLE: A precise, formal title in Title Case. Examples:
+      - "Resolution for Opening of Current Bank Account with [Bank Name]"
+      - "Resolution for Appointment of Authorized Signatory for GST Filings"
+      - "Resolution for Approval of Annual Financial Statements for FY 2024-25"
+
+   b) PREAMBLE (WHEREAS clause): Write 2-3 sentences explaining:
+      - The business context and WHY this resolution is needed
+      - The legal/regulatory requirement driving it
+      - Reference the company's business activities
+
+   c) RESOLVED TEXT: Write 4-6 comprehensive sentences that:
+      - Start with "RESOLVED THAT"
+      - Specifically authorize "${authorityName}" (${authorityTitle})
+      - Include ALL specific details from the description (bank name, branch, account type, amounts, IFSC, etc.)
+      - Grant necessary powers (to sign, operate, execute documents, etc.)
+      - Mention compliance with applicable laws
+      - Include any conditions or limitations mentioned
+      - End with authority to do all acts as may be deemed necessary
+
+5. FIELD EXTRACTION:
+   - proposer/resolvedBy: Extract name from description, or default to "${authorityName}"
+   - seconded: Extract if mentioned, otherwise empty string ""
+   - venue: Default to "Registered Office, ${district}" unless specified
+
+6. ABSOLUTELY DO NOT:
+   - Copy the user's input verbatim — rewrite in formal legal language
+   - Add generic filler — every sentence must serve a legal purpose
+   - Forget to include specific details (names, numbers, dates, amounts)
+   - Use the brand name alone — use the legal entity name in formal context
+
+OUTPUT FORMAT: Respond with ONLY valid JSON. No markdown, no code blocks, no explanation.
 {
-  "title": "A concise, professional title in Title Case (e.g., Opening of Current Bank Account with State Bank of India)",
-  "preamble": "A WHEREAS clause explaining the background/reason. Start with WHEREAS,",
-  "resolvedText": "The full RESOLVED THAT text with formal legal language. Write 3-5 detailed sentences. Start with RESOLVED THAT, and include all specific details like bank names, amounts, people, dates, account types from the description.",
-  "venue": "Meeting venue (default: Registered Office, ${settings?.district || ''} unless specified)",
-  "resolvedBy": "Name of the person who proposed (extract from description, or use ${settings?.authorityName || ''})",
-  "secondedBy": "Name of the person who seconded (extract if mentioned, otherwise empty string)",
-  "authorityName": "${settings?.authorityName || ''}",
-  "authorityTitle": "${settings?.authorityTitle || ''}"
-}
+  "title": "Formal Title Case title",
+  "preamble": "WHEREAS, [2-3 sentences of context]...",
+  "resolvedText": "RESOLVED THAT, [4-6 comprehensive sentences with all details]...",
+  "venue": "Registered Office, ${district}",
+  "resolvedBy": "Name of proposer",
+  "secondedBy": "Name of seconder or empty string",
+  "authorityName": "${authorityName}",
+  "authorityTitle": "${authorityTitle}"
+}`;
 
-RULES:
-1. Extract ALL specific details from the description (names, bank names, amounts, dates, account types, IFSC codes, etc.)
-2. Write the preamble as a single WHEREAS sentence with proper context
-3. The resolvedText must be comprehensive - include all specifics mentioned
-4. Use formal legal language: hereby approves, subject to applicable laws, as may be deemed necessary
-5. Keep the title concise but descriptive (under 15 words)
-6. The resolvedText should start with RESOLVED THAT, and be 3-5 well-crafted sentences
-7. If proposer/seconder names are mentioned, extract them; if not, proposer defaults to authority
-8. Output ONLY raw JSON, no markdown formatting, no code blocks`;
+      const aiResponse = await fetch(ZAI_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${ZAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'glm-4-plus',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Draft a professional board resolution based on this request:\n\n${description}` }
+          ],
+          temperature: 0.3,
+          max_tokens: 3000,
+        }),
+      });
 
-    const aiResponse = await fetch(ZAI_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${ZAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'glm-4-plus',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Draft a professional board resolution from this description:\n\n${description}` }
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-      }),
-    });
+      if (!aiResponse.ok) {
+        const errText = await aiResponse.text();
+        console.error('ZhipuAI API error:', aiResponse.status, errText);
+        res.status(502).json({ error: 'AI service temporarily unavailable. Please try again.' });
+        return;
+      }
 
-    if (!aiResponse.ok) {
-      const errText = await aiResponse.text();
-      console.error('ZhipuAI API error:', aiResponse.status, errText);
-      res.status(502).json({ error: 'AI service error' });
+      const aiData = await aiResponse.json();
+      const content = aiData.choices?.[0]?.message?.content || '';
+      const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch (parseErr) {
+        console.error('JSON parse error:', parseErr, 'Content:', content);
+        res.status(500).json({ error: 'AI returned invalid format. Please try again.' });
+        return;
+      }
+
+      res.status(200).json({
+        title: parsed.title || '',
+        preamble: parsed.preamble || '',
+        resolvedText: parsed.resolvedText || '',
+        venue: parsed.venue || `Registered Office, ${district}`,
+        resolvedBy: parsed.resolvedBy || authorityName,
+        secondedBy: parsed.secondedBy || '',
+        authorityName: parsed.authorityName || authorityName,
+        authorityTitle: parsed.authorityTitle || authorityTitle,
+      });
       return;
     }
 
-    const aiData = await aiResponse.json();
-    const content = aiData.choices?.[0]?.message?.content || '';
-    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+    res.status(404).json({ error: 'Endpoint not found. Use POST / for AI generation, GET/PUT /data for data storage.' });
 
-    res.status(200).json({
-      title: parsed.title || '',
-      preamble: parsed.preamble || '',
-      resolvedText: parsed.resolvedText || '',
-      venue: parsed.venue || `Registered Office, ${settings?.district || ''}`,
-      resolvedBy: parsed.resolvedBy || settings?.authorityName || '',
-      secondedBy: parsed.secondedBy || '',
-      authorityName: parsed.authorityName || settings?.authorityName || '',
-      authorityTitle: parsed.authorityTitle || settings?.authorityTitle || '',
-    });
   } catch (err) {
-    console.error('AI generation error:', err);
-    res.status(500).json({ error: 'Failed to generate resolution: ' + (err.message || 'Unknown error') });
+    console.error('Handler error:', err);
+    res.status(500).json({ error: 'Internal server error: ' + (err.message || 'Unknown') });
   }
 });
 
