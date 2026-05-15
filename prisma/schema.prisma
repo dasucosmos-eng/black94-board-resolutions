@@ -1,0 +1,56 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Post {
+  id        String   @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean  @default(false)
+  authorId  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CompanySettings {
+  id          String @id @default(cuid())
+  companyName String @default("Black94")
+  address     String?
+  phone       String?
+  email       String?
+  cin         String?
+  stampData   String?
+  signatureData String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model BoardResolution {
+  id              String   @id @default(cuid())
+  resolutionNumber String
+  title           String
+  date            String
+  venue           String?
+  preamble        String?
+  resolvedText    String
+  resolvedBy      String?
+  secondedBy      String?
+  authorityName   String?
+  authorityTitle  String?
+  status          String   @default("draft")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
