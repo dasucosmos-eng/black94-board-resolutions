@@ -16,17 +16,39 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 
+// --- LocalStorage Helpers ---
+function getFromStorage<T>(key: string, fallback: T): T {
+  if (typeof window === 'undefined') return fallback;
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function setToStorage<T>(key: string, value: T): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (e) {
+    console.error('localStorage write failed:', e);
+  }
+}
+
+function generateId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).substring(2, 10);
+}
+
+// --- Types ---
 interface CompanySettings {
-  id: string;
   companyName: string;
-  address: string | null;
-  phone: string | null;
-  email: string | null;
-  cin: string | null;
-  stampData: string | null;
-  signatureData: string | null;
-  authorityName: string | null;
-  authorityTitle: string | null;
+  address: string;
+  phone: string;
+  email: string;
+  cin: string;
+  authorityName: string;
+  authorityTitle: string;
 }
 
 interface BoardResolution {
@@ -34,21 +56,31 @@ interface BoardResolution {
   resolutionNumber: string;
   title: string;
   date: string;
-  venue: string | null;
-  preamble: string | null;
+  venue: string;
+  preamble: string;
   resolvedText: string;
-  resolvedBy: string | null;
-  secondedBy: string | null;
-  authorityName: string | null;
-  authorityTitle: string | null;
+  resolvedBy: string;
+  secondedBy: string;
+  authorityName: string;
+  authorityTitle: string;
   status: string;
   createdAt: string;
   updatedAt: string;
 }
 
+const DEFAULT_SETTINGS: CompanySettings = {
+  companyName: 'Black94',
+  address: '',
+  phone: '',
+  email: '',
+  cin: '',
+  authorityName: '',
+  authorityTitle: '',
+};
+
+// --- Main Component ---
 export default function BoardResolutionApp() {
-  // State
-  const [settings, setSettings] = useState<CompanySettings | null>(null);
+  const [settings, setSettings] = useState<CompanySettings>(DEFAULT_SETTINGS);
   const [resolutions, setResolutions] = useState<BoardResolution[]>([]);
   const [activeTab, setActiveTab] = useState('create');
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -56,7 +88,6 @@ export default function BoardResolutionApp() {
   const [saving, setSaving] = useState(false);
   const [generatingPdf, setGeneratingPdf] = useState(false);
 
-  // Form state
   const [form, setForm] = useState({
     resolutionNumber: '',
     title: '',
@@ -70,18 +101,8 @@ export default function BoardResolutionApp() {
     authorityTitle: '',
   });
 
-  // Settings form
-  const [settingsForm, setSettingsForm] = useState({
-    companyName: 'Black94',
-    address: '',
-    phone: '',
-    email: '',
-    cin: '',
-    authorityName: '',
-    authorityTitle: '',
-  });
+  const [settingsForm, setSettingsForm] = useState<CompanySettings>(DEFAULT_SETTINGS);
 
-  // Upload states
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [stampPreview, setStampPreview] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState<'signature' | 'stamp' | null>(null);
@@ -90,42 +111,23 @@ export default function BoardResolutionApp() {
   const stampInputRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  // Load data
+  // Load from localStorage
   useEffect(() => {
-    loadData();
+    const savedSettings = getFromStorage<CompanySettings>('black94_settings', DEFAULT_SETTINGS);
+    const savedResolutions = getFromStorage<BoardResolution[]>('black94_resolutions', []);
+    const savedSignature = getFromStorage<string | null>('black94_signature', null);
+    const savedStamp = getFromStorage<string | null>('black94_stamp', null);
+
+    setSettings(savedSettings);
+    setSettingsForm(savedSettings);
+    setResolutions(savedResolutions);
+    setSignaturePreview(savedSignature);
+    setStampPreview(savedStamp);
+    setLoading(false);
   }, []);
 
-  const loadData = async () => {
-    try {
-      const [settingsRes, resolutionsRes] = await Promise.all([
-        fetch('/api/settings'),
-        fetch('/api/resolutions'),
-      ]);
-      const settingsData = await settingsRes.json();
-      const resolutionsData = await resolutionsRes.json();
-
-      setSettings(settingsData);
-      setResolutions(resolutionsData);
-      setSignaturePreview(settingsData.signatureData);
-      setStampPreview(settingsData.stampData);
-      setSettingsForm({
-        companyName: settingsData.companyName || 'Black94',
-        address: settingsData.address || '',
-        phone: settingsData.phone || '',
-        email: settingsData.email || '',
-        cin: settingsData.cin || '',
-        authorityName: settingsData.authorityName || '',
-        authorityTitle: settingsData.authorityTitle || '',
-      });
-    } catch {
-      toast.error('Failed to load data');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Handle signature upload
-  const handleSignatureUpload = async (file: File) => {
+  // Signature upload
+  const handleSignatureUpload = (file: File) => {
     if (!file.type.startsWith('image/')) {
       toast.error('Please upload an image file');
       return;
@@ -136,27 +138,17 @@ export default function BoardResolutionApp() {
     }
 
     const reader = new FileReader();
-    reader.onloadend = async () => {
+    reader.onloadend = () => {
       const base64 = reader.result as string;
-      try {
-        const res = await fetch('/api/upload-signature', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ signatureData: base64 }),
-        });
-        if (res.ok) {
-          setSignaturePreview(base64);
-          toast.success('Signature saved successfully');
-        }
-      } catch {
-        toast.error('Failed to save signature');
-      }
+      setSignaturePreview(base64);
+      setToStorage('black94_signature', base64);
+      toast.success('Signature saved successfully');
     };
     reader.readAsDataURL(file);
   };
 
-  // Handle stamp upload
-  const handleStampUpload = async (file: File) => {
+  // Stamp upload
+  const handleStampUpload = (file: File) => {
     if (!file.type.startsWith('image/')) {
       toast.error('Please upload an image file');
       return;
@@ -167,104 +159,83 @@ export default function BoardResolutionApp() {
     }
 
     const reader = new FileReader();
-    reader.onloadend = async () => {
+    reader.onloadend = () => {
       const base64 = reader.result as string;
-      try {
-        const res = await fetch('/api/upload-stamp', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ stampData: base64 }),
-        });
-        if (res.ok) {
-          setStampPreview(base64);
-          toast.success('Stamp saved successfully');
-        }
-      } catch {
-        toast.error('Failed to save stamp');
-      }
+      setStampPreview(base64);
+      setToStorage('black94_stamp', base64);
+      toast.success('Stamp saved successfully');
     };
     reader.readAsDataURL(file);
   };
 
   // Save settings
-  const handleSaveSettings = async () => {
+  const handleSaveSettings = () => {
     setSaving(true);
-    try {
-      const res = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(settingsForm),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setSettings(data);
-        toast.success('Settings saved successfully');
-      }
-    } catch {
-      toast.error('Failed to save settings');
-    } finally {
+    setTimeout(() => {
+      setSettings(settingsForm);
+      setToStorage('black94_settings', settingsForm);
+      toast.success('Settings saved successfully');
       setSaving(false);
-    }
+    }, 300);
   };
 
   // Create resolution
-  const handleCreateResolution = async () => {
+  const handleCreateResolution = () => {
     if (!form.title || !form.resolvedText || !form.resolutionNumber) {
       toast.error('Please fill in the required fields (Resolution Number, Title, and Resolved Text)');
       return;
     }
 
     setSaving(true);
-    try {
-      const res = await fetch('/api/resolutions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...form,
-          authorityName: form.authorityName || settingsForm.authorityName || '',
-          authorityTitle: form.authorityTitle || settingsForm.authorityTitle || '',
-          status: 'final',
-        }),
+    setTimeout(() => {
+      const newResolution: BoardResolution = {
+        id: generateId(),
+        resolutionNumber: form.resolutionNumber,
+        title: form.title,
+        date: form.date,
+        venue: form.venue,
+        preamble: form.preamble,
+        resolvedText: form.resolvedText,
+        resolvedBy: form.resolvedBy,
+        secondedBy: form.secondedBy,
+        authorityName: form.authorityName || settingsForm.authorityName,
+        authorityTitle: form.authorityTitle || settingsForm.authorityTitle,
+        status: 'final',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+
+      const updated = [newResolution, ...resolutions];
+      setResolutions(updated);
+      setToStorage('black94_resolutions', updated);
+      toast.success('Board Resolution created successfully');
+
+      setForm({
+        resolutionNumber: '',
+        title: '',
+        date: new Date().toISOString().split('T')[0],
+        venue: '',
+        preamble: '',
+        resolvedText: '',
+        resolvedBy: '',
+        secondedBy: '',
+        authorityName: '',
+        authorityTitle: '',
       });
-      if (res.ok) {
-        const data = await res.json();
-        setResolutions((prev) => [data, ...prev]);
-        toast.success('Board Resolution created successfully');
-        setForm({
-          resolutionNumber: '',
-          title: '',
-          date: new Date().toISOString().split('T')[0],
-          venue: '',
-          preamble: '',
-          resolvedText: '',
-          resolvedBy: '',
-          secondedBy: '',
-          authorityName: '',
-          authorityTitle: '',
-        });
-        setActiveTab('history');
-      }
-    } catch {
-      toast.error('Failed to create resolution');
-    } finally {
+      setActiveTab('history');
       setSaving(false);
-    }
+    }, 300);
   };
 
   // Delete resolution
-  const handleDeleteResolution = async (id: string) => {
-    try {
-      const res = await fetch(`/api/resolutions?id=${id}`, { method: 'DELETE' });
-      if (res.ok) {
-        setResolutions((prev) => prev.filter((r) => r.id !== id));
-        toast.success('Resolution deleted');
-      }
-    } catch {
-      toast.error('Failed to delete resolution');
-    }
+  const handleDeleteResolution = (id: string) => {
+    const updated = resolutions.filter((r) => r.id !== id);
+    setResolutions(updated);
+    setToStorage('black94_resolutions', updated);
+    toast.success('Resolution deleted');
   };
 
-  // Generate next resolution number
+  // Next resolution number
   const getNextResolutionNumber = useCallback(() => {
     if (resolutions.length === 0) return 'BLK94/2025-26/001';
     const last = resolutions[0];
@@ -286,7 +257,7 @@ export default function BoardResolutionApp() {
     });
   };
 
-  // Drag and drop handlers
+  // Drag and drop
   const handleDragOver = (e: React.DragEvent, type: 'signature' | 'stamp') => {
     e.preventDefault();
     setDragOver(type);
@@ -304,6 +275,20 @@ export default function BoardResolutionApp() {
       if (type === 'signature') handleSignatureUpload(file);
       else handleStampUpload(file);
     }
+  };
+
+  // Remove signature
+  const removeSignature = () => {
+    setSignaturePreview(null);
+    setToStorage('black94_signature', null);
+    toast.success('Signature removed');
+  };
+
+  // Remove stamp
+  const removeStamp = () => {
+    setStampPreview(null);
+    setToStorage('black94_stamp', null);
+    toast.success('Stamp removed');
   };
 
   // PDF Generation
@@ -360,7 +345,7 @@ export default function BoardResolutionApp() {
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-white">
+    <div className="min-h-screen bg-[#0a0a0a] text-white flex flex-col">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-white/10 bg-[#0a0a0a]/95 backdrop-blur-xl">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -390,7 +375,7 @@ export default function BoardResolutionApp() {
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 w-full">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-8">
           <TabsList className="bg-white/5 border border-white/10 h-auto p-1">
             <TabsTrigger
@@ -419,7 +404,6 @@ export default function BoardResolutionApp() {
           {/* CREATE TAB */}
           <TabsContent value="create" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              {/* Form */}
               <div className="lg:col-span-2 space-y-6">
                 <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
                   <CardHeader className="pb-4">
@@ -592,12 +576,11 @@ export default function BoardResolutionApp() {
 
               {/* Sidebar */}
               <div className="space-y-4">
-                {/* Upload Status */}
                 <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-white text-sm flex items-center gap-2">
                       <PenTool className="w-4 h-4 text-white/60" />
-                      Signature & Stamp
+                      Signature &amp; Stamp
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
@@ -614,12 +597,7 @@ export default function BoardResolutionApp() {
                         <div className="relative group rounded-lg overflow-hidden border border-white/10 bg-white p-2">
                           <img src={signaturePreview} alt="Signature" className="w-full h-20 object-contain" />
                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => signatureInputRef.current?.click()}
-                              className="text-xs"
-                            >
+                            <Button size="sm" variant="secondary" onClick={() => signatureInputRef.current?.click()} className="text-xs">
                               Change
                             </Button>
                           </div>
@@ -643,10 +621,7 @@ export default function BoardResolutionApp() {
                         type="file"
                         accept="image/*"
                         className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleSignatureUpload(file);
-                        }}
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleSignatureUpload(f); }}
                       />
                     </div>
 
@@ -663,12 +638,7 @@ export default function BoardResolutionApp() {
                         <div className="relative group rounded-lg overflow-hidden border border-white/10 bg-white p-2">
                           <img src={stampPreview} alt="Stamp" className="w-full h-20 object-contain" />
                           <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                            <Button
-                              size="sm"
-                              variant="secondary"
-                              onClick={() => stampInputRef.current?.click()}
-                              className="text-xs"
-                            >
+                            <Button size="sm" variant="secondary" onClick={() => stampInputRef.current?.click()} className="text-xs">
                               Change
                             </Button>
                           </div>
@@ -692,16 +662,12 @@ export default function BoardResolutionApp() {
                         type="file"
                         accept="image/*"
                         className="hidden"
-                        onChange={(e) => {
-                          const file = e.target.files?.[0];
-                          if (file) handleStampUpload(file);
-                        }}
+                        onChange={(e) => { const f = e.target.files?.[0]; if (f) handleStampUpload(f); }}
                       />
                     </div>
                   </CardContent>
                 </Card>
 
-                {/* Quick Info */}
                 <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
                   <CardHeader className="pb-3">
                     <CardTitle className="text-white text-sm flex items-center gap-2">
@@ -714,12 +680,8 @@ export default function BoardResolutionApp() {
                       <img src="/black94-logo.png" alt="Black94" className="w-6 h-6 rounded object-contain" />
                       <span className="text-sm font-semibold text-white">{settingsForm.companyName}</span>
                     </div>
-                    {settingsForm.cin && (
-                      <p className="text-xs text-white/40">CIN: {settingsForm.cin}</p>
-                    )}
-                    {settingsForm.address && (
-                      <p className="text-xs text-white/40">{settingsForm.address}</p>
-                    )}
+                    {settingsForm.cin && <p className="text-xs text-white/40">CIN: {settingsForm.cin}</p>}
+                    {settingsForm.address && <p className="text-xs text-white/40">{settingsForm.address}</p>}
                     <p className="text-[10px] text-white/25 pt-1">
                       Upload your signature and stamp in Settings to auto-apply on all resolutions.
                     </p>
@@ -840,7 +802,6 @@ export default function BoardResolutionApp() {
                                   <ResolutionPreview
                                     ref={previewRef}
                                     form={form}
-                                    settings={settings}
                                     signaturePreview={signaturePreview}
                                     stampPreview={stampPreview}
                                     settingsForm={settingsForm}
@@ -883,7 +844,6 @@ export default function BoardResolutionApp() {
           {/* SETTINGS TAB */}
           <TabsContent value="settings" className="space-y-6">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              {/* Company Details */}
               <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
                 <CardHeader>
                   <CardTitle className="text-white text-lg flex items-center gap-2">
@@ -972,7 +932,6 @@ export default function BoardResolutionApp() {
                 </CardContent>
               </Card>
 
-              {/* Signature & Stamp Upload */}
               <div className="space-y-6">
                 <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
                   <CardHeader>
@@ -989,22 +948,10 @@ export default function BoardResolutionApp() {
                       <div className="relative group rounded-xl overflow-hidden border border-white/10 bg-white p-4">
                         <img src={signaturePreview} alt="Signature" className="w-full h-32 object-contain" />
                         <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => signatureInputRef.current?.click()}
-                          >
+                          <Button size="sm" variant="secondary" onClick={() => signatureInputRef.current?.click()}>
                             Change
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={async () => {
-                              await fetch('/api/upload-signature', { method: 'DELETE' });
-                              setSignaturePreview(null);
-                              toast.success('Signature removed');
-                            }}
-                          >
+                          <Button size="sm" variant="destructive" onClick={removeSignature}>
                             Remove
                           </Button>
                         </div>
@@ -1046,22 +993,10 @@ export default function BoardResolutionApp() {
                       <div className="relative group rounded-xl overflow-hidden border border-white/10 bg-white p-4">
                         <img src={stampPreview} alt="Stamp" className="w-full h-32 object-contain" />
                         <div className="absolute inset-0 bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            onClick={() => stampInputRef.current?.click()}
-                          >
+                          <Button size="sm" variant="secondary" onClick={() => stampInputRef.current?.click()}>
                             Change
                           </Button>
-                          <Button
-                            size="sm"
-                            variant="destructive"
-                            onClick={async () => {
-                              await fetch('/api/upload-stamp', { method: 'DELETE' });
-                              setStampPreview(null);
-                              toast.success('Stamp removed');
-                            }}
-                          >
+                          <Button size="sm" variant="destructive" onClick={removeStamp}>
                             Remove
                           </Button>
                         </div>
@@ -1113,7 +1048,7 @@ export default function BoardResolutionApp() {
   );
 }
 
-// Resolution Preview Component
+// --- Resolution Preview Component ---
 const ResolutionPreview = React.forwardRef<HTMLDivElement, {
   form: {
     resolutionNumber: string;
@@ -1127,19 +1062,10 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
     authorityName: string;
     authorityTitle: string;
   };
-  settings: CompanySettings | null;
   signaturePreview: string | null;
   stampPreview: string | null;
-  settingsForm: {
-    companyName: string;
-    address: string;
-    phone: string;
-    email: string;
-    cin: string;
-    authorityName: string;
-    authorityTitle: string;
-  };
-}>(({ form, settings, signaturePreview, stampPreview, settingsForm }, ref) => {
+  settingsForm: CompanySettings;
+}>(({ form, signaturePreview, stampPreview, settingsForm }, ref) => {
   const companyName = settingsForm.companyName || 'Black94';
   const cin = settingsForm.cin || '';
   const address = settingsForm.address || '';
@@ -1161,22 +1087,12 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
       {/* Header */}
       <div className="text-center mb-8">
         <div className="flex items-center justify-center mb-4">
-          <img
-            src="/black94-logo.png"
-            alt={companyName}
-            className="h-16 w-auto object-contain"
-          />
+          <img src="/black94-logo.png" alt={companyName} className="h-16 w-auto object-contain" />
         </div>
         <div className="border-t-2 border-black pt-4">
-          <h1 className="text-2xl font-bold uppercase tracking-wider text-black">
-            {companyName}
-          </h1>
-          {cin && (
-            <p className="text-xs text-gray-600 mt-1 tracking-wide">CIN: {cin}</p>
-          )}
-          {address && (
-            <p className="text-xs text-gray-600 mt-1">{address}</p>
-          )}
+          <h1 className="text-2xl font-bold uppercase tracking-wider text-black">{companyName}</h1>
+          {cin && <p className="text-xs text-gray-600 mt-1 tracking-wide">CIN: {cin}</p>}
+          {address && <p className="text-xs text-gray-600 mt-1">{address}</p>}
         </div>
       </div>
 
@@ -1206,14 +1122,12 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       )}
 
-      {/* Preamble */}
       {form.preamble && (
         <div className="mb-6 text-sm leading-relaxed">
           <p className="mb-2 italic text-gray-700">{form.preamble}</p>
         </div>
       )}
 
-      {/* Resolved Text */}
       <div className="mb-10">
         <p className="text-sm font-bold mb-2">&quot;RESOLVED THAT&quot;</p>
         <div className="text-sm leading-[1.8] text-gray-800 pl-4 border-l-2 border-gray-300">
@@ -1221,7 +1135,6 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       </div>
 
-      {/* Resolved By / Seconded By */}
       {(form.resolvedBy || form.secondedBy) && (
         <div className="mb-10 flex gap-12 text-sm">
           {form.resolvedBy && (
@@ -1239,21 +1152,15 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       )}
 
-      {/* Separator */}
       <div className="border-t border-gray-300 my-10" />
 
       {/* Signature Area */}
       <div className="relative mt-16">
         <div className="flex items-end justify-between">
-          {/* Signature */}
           <div className="text-center">
             {signaturePreview && (
               <div className="mb-2">
-                <img
-                  src={signaturePreview}
-                  alt="Authorized Signature"
-                  className="h-16 w-auto mx-auto object-contain"
-                />
+                <img src={signaturePreview} alt="Authorized Signature" className="h-16 w-auto mx-auto object-contain" />
               </div>
             )}
             <div className="border-t border-black pt-2 min-w-[200px]">
@@ -1267,14 +1174,13 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
             </div>
           </div>
 
-          {/* Stamp */}
           <div className="relative">
             {stampPreview && (
               <div className="absolute -top-8 -right-8 opacity-70">
                 <img
                   src={stampPreview}
                   alt="Company Stamp"
-                  className="h-24 w-auto object-contain rotate-[-12deg]"
+                  className="h-24 w-auto object-contain"
                   style={{ transform: 'rotate(-12deg)' }}
                 />
               </div>
@@ -1283,7 +1189,6 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       </div>
 
-      {/* Footer Note */}
       <div className="mt-16 pt-6 border-t border-gray-200 text-center">
         <p className="text-[9px] text-gray-400 tracking-wide">
           This is a computer-generated Board Resolution document of {companyName}.
