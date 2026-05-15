@@ -5,7 +5,6 @@
   "main": "index.js",
   "type": "module",
   "dependencies": {
-    "firebase-functions": "^6.0.0",
-    "z-ai-web-dev-sdk": "^0.0.17"
+    "firebase-functions": "^6.0.0"
   }
 }

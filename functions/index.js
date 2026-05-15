@@ -1,9 +1,10 @@
 import { onRequest } from 'firebase-functions/v2/https';
 import { cors } from 'firebase-functions/v2/https';
-import ZAI from 'z-ai-web-dev-sdk';
+
+const ZAI_API_KEY = 'c5028ebdb86e4a2f8575ff2c70a686cf.Afesd3OL7eL7VHvn';
+const ZAI_API_URL = 'https://open.bigmodel.cn/api/paas/v4/chat/completions';
 
 const aiHandler = onRequest({ region: 'asia-south1' }, async (req, res) => {
-  // Handle CORS
   cors({ origin: true })(req, res, async () => {
     if (req.method !== 'POST') {
       res.status(405).send('Method Not Allowed');
@@ -18,46 +19,68 @@ const aiHandler = onRequest({ region: 'asia-south1' }, async (req, res) => {
         return;
       }
 
-      const zai = await ZAI.create();
+      const systemPrompt = `You are an expert legal document writer specializing in Indian Board Resolutions for proprietorship firms. Convert a plain English description into a professional, legally-formatted board resolution.
 
-      const systemPrompt = `You are an expert legal assistant specializing in drafting board resolutions for Indian companies. You write in formal, professional corporate language.
-
-Given a raw description from a user, you must create a polished, professional board resolution. You must extract and enhance all fields.
-
-COMPANY INFO:
+COMPANY DETAILS:
 - Company Name: ${settings?.companyName || 'Black94'}
 - Legal Name: ${settings?.legalName || ''}
 - Constitution: ${settings?.constitution || 'Proprietorship'}
 - GSTIN: ${settings?.gstin || ''}
 - Address: ${settings?.address || ''}
-- District: ${settings?.district || ''}
 - State: ${settings?.state || ''}
-- Default Authority: ${settings?.authorityName || ''}, ${settings?.authorityTitle || ''}
+- District: ${settings?.district || ''}
+- Authority/Proprietor: ${settings?.authorityName || ''}
+- Designation: ${settings?.authorityTitle || ''}
+
+You MUST respond with ONLY valid JSON (no markdown, no code blocks, no extra text). The JSON must have exactly these fields:
+{
+  "title": "A concise, professional title in Title Case (e.g., Opening of Current Bank Account with State Bank of India)",
+  "preamble": "A WHEREAS clause explaining the background/reason. Start with WHEREAS,",
+  "resolvedText": "The full RESOLVED THAT text with formal legal language. Write 3-5 detailed sentences. Start with RESOLVED THAT, and include all specific details like bank names, amounts, people, dates, account types from the description.",
+  "venue": "Meeting venue (default: Registered Office, ${settings?.district || ''} unless specified)",
+  "resolvedBy": "Name of the person who proposed (extract from description, or use ${settings?.authorityName || ''})",
+  "secondedBy": "Name of the person who seconded (extract if mentioned, otherwise empty string)",
+  "authorityName": "${settings?.authorityName || ''}",
+  "authorityTitle": "${settings?.authorityTitle || ''}"
+}
 
 RULES:
-1. "title" - Create a formal, concise title. Examples: "Approval of Annual Budget for FY 2025-26", "Appointment of Mr. Rajesh Kumar as Managing Director", "Opening of Current Bank Account with State Bank of India". Use Title Case.
-2. "preamble" - Write 1-2 sentences of formal background/context explaining WHY this resolution is needed. Start with "WHEREAS," or similar formal language. Be specific and reference relevant facts from the description.
-3. "resolvedText" - Write the formal resolution text starting with proper legal language. This is the core decision. It should be clear, complete, and actionable. Include all specific details mentioned (names, amounts, dates, terms, conditions). Use formal language like "hereby approves", "hereby authorizes", "hereby resolves". Write 3-5 sentences covering all aspects.
-4. "venue" - Default to "Registered Office, ${settings?.district || ''}" unless the user specifies a different venue.
-5. "resolvedBy" - Extract proposer name if mentioned, otherwise leave empty string.
-6. "secondedBy" - Extract seconder name if mentioned, otherwise leave empty string.
-7. "authorityName" and "authorityTitle" - Keep as default unless user specifies someone different.
+1. Extract ALL specific details from the description (names, bank names, amounts, dates, account types, IFSC codes, etc.)
+2. Write the preamble as a single WHEREAS sentence with proper context
+3. The resolvedText must be comprehensive - include all specifics mentioned
+4. Use formal legal language: hereby approves, subject to applicable laws, as may be deemed necessary
+5. Keep the title concise but descriptive (under 15 words)
+6. The resolvedText should start with RESOLVED THAT, and be 3-5 well-crafted sentences
+7. If proposer/seconder names are mentioned, extract them; if not, proposer defaults to authority
+8. Output ONLY raw JSON, no markdown formatting, no code blocks`;
 
-IMPORTANT: Write the preamble and resolvedText in proper formal corporate legal language. Do NOT just copy-paste the user input. Polish it into professional resolution language.
-
-Return ONLY valid JSON in this exact format, no markdown, no code blocks, no extra text:
-{"title": "...", "preamble": "...", "resolvedText": "...", "venue": "...", "resolvedBy": "...", "secondedBy": "...", "authorityName": "...", "authorityTitle": "..."}`;
-
-      const completion = await zai.chat.completions.create({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Draft a professional board resolution from this description:\n\n${description}` },
-        ],
-        temperature: 0.3,
+      const aiResponse = await fetch(ZAI_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${ZAI_API_KEY}`,
+        },
+        body: JSON.stringify({
+          model: 'glm-4-plus',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: `Draft a professional board resolution from this description:\n\n${description}` }
+          ],
+          temperature: 0.3,
+          max_tokens: 2000,
+        }),
       });
 
-      const responseText = completion.choices[0]?.message?.content || '';
-      const cleaned = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      if (!aiResponse.ok) {
+        const errText = await aiResponse.text();
+        console.error('ZhipuAI API error:', aiResponse.status, errText);
+        res.status(502).json({ error: 'AI service error' });
+        return;
+      }
+
+      const aiData = await aiResponse.json();
+      const content = aiData.choices?.[0]?.message?.content || '';
+      const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       const parsed = JSON.parse(cleaned);
 
       res.status(200).json({
@@ -65,7 +88,7 @@ Return ONLY valid JSON in this exact format, no markdown, no code blocks, no ext
         preamble: parsed.preamble || '',
         resolvedText: parsed.resolvedText || '',
         venue: parsed.venue || `Registered Office, ${settings?.district || ''}`,
-        resolvedBy: parsed.resolvedBy || '',
+        resolvedBy: parsed.resolvedBy || settings?.authorityName || '',
         secondedBy: parsed.secondedBy || '',
         authorityName: parsed.authorityName || settings?.authorityName || '',
         authorityTitle: parsed.authorityTitle || settings?.authorityTitle || '',
