@@ -1,24 +1,26 @@
 ---
 Task ID: 1
 Agent: Main Agent
-Task: Build Board Resolution App for Black94
+Task: Redesign board resolution PDF to proper A4 size with professional header
 
 Work Log:
-- Initialized fullstack development environment with Next.js 16
-- Copied uploaded Black94 logo to public directory
-- Installed jspdf and html2canvas-pro for PDF generation
-- Created Prisma database schema with CompanySettings and BoardResolution models
-- Built 4 API routes: /api/settings, /api/upload-signature, /api/upload-stamp, /api/resolutions
-- Built comprehensive Board Resolution app with 3 tabs: Create, History, Settings
-- Implemented drag-and-drop signature and stamp upload with persistent storage
-- Created professional resolution document preview with company branding
-- Implemented PDF generation from preview
-- Applied Black94 branding with full dark/black theme
-- Verified app compiles and runs successfully with clean lint
+- Analyzed the uploaded screenshot showing the current resolution PDF view
+- Identified issues: not proper A4 dimensions, plain/minimal header with no logo, no design elements
+- Read the full page.tsx (1310 lines) to understand PDF generation and ResolutionPreview component
+- Redesigned ResolutionPreview component with inline styles for precise A4 control (794px x 1123px at 96dpi)
+- Added professional header: Black94 logo on left, company details (legal name, constitution, GSTIN, address) on right, separated by 2px border
+- Added top and bottom gradient accent lines (black gradient bars)
+- Added elegant centered "BOARD RESOLUTION" title with decorative horizontal line behind it
+- Redesigned metadata section (Resolution No, Venue, Date) with uppercase labels and subtle gray divider lines
+- Improved preamble, resolved text, proposed/seconded sections with better typography
+- Updated signature area with proper styling
+- Fixed PDF generation: removed Math.min ratio distortion, now uses fixed A4 width (794px) with html2canvas and maps directly to full A4 page
+- Updated preview dialog to properly scale A4 preview (82% scale in 900px dialog)
+- Removed JSX comments that were causing build errors
+- Built and deployed to Firebase Hosting
 
 Stage Summary:
-- Board Resolution app fully functional at / route
-- Features: Create resolutions, view history, preview documents, download PDF
-- Signature and stamp uploads persist in SQLite database
-- Black94 branding with professional black theme throughout
-- All API routes working (200 status confirmed in dev logs)
+- Resolution PDF is now exactly A4 size (210mm x 297mm)
+- Professional header with logo + company info in letterhead style
+- Clean, elegant design with accent lines, proper typography, and professional layout
+- Live at https://black94-board-resolutions.web.app

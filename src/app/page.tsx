@@ -541,16 +541,24 @@ export default function BoardResolutionApp() {
     try {
       const html2canvas = (await import('html2canvas-pro')).default;
       const { jsPDF } = await import('jspdf');
-      const canvas = await html2canvas(previewRef.current, { scale: 2, useCORS: true, allowTaint: true, backgroundColor: '#ffffff', logging: false });
+      // A4: 210mm x 297mm. At 96dpi: 794px x 1123px. We use 2x for quality: 1588x2246
+      const a4WidthPx = 794;
+      const a4HeightPx = 1123;
+      const canvas = await html2canvas(previewRef.current, {
+        scale: 2,
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        logging: false,
+        width: a4WidthPx,
+        windowWidth: a4WidthPx,
+      });
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const imgWidth = canvas.width;
-      const imgHeight = canvas.height;
-      const ratio = Math.min(pdfWidth / imgWidth, pdfHeight / imgHeight);
-      const imgX = (pdfWidth - imgWidth * ratio) / 2;
-      pdf.addImage(imgData, 'PNG', imgX, 0, imgWidth * ratio, imgHeight * ratio);
+      const pdfWidth = pdf.internal.pageSize.getWidth(); // 210mm
+      const pdfHeight = pdf.internal.pageSize.getHeight(); // 297mm
+      // Map the HTML canvas to fill the full A4 page
+      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save(resolution ? `Board_Resolution_${resolution.resolutionNumber}.pdf` : 'Board_Resolution.pdf');
       toast.success('PDF generated successfully');
     } catch (err) {
@@ -990,19 +998,23 @@ export default function BoardResolutionApp() {
                                   <span className="hidden sm:inline ml-1">Preview</span>
                                 </Button>
                               </DialogTrigger>
-                              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto bg-[#111] border-white/10">
+                              <DialogContent className="max-w-[900px] max-h-[90vh] overflow-y-auto bg-[#111] border-white/10">
                                 <DialogHeader>
                                   <DialogTitle className="text-white">Preview Resolution</DialogTitle>
                                   <DialogDescription className="text-white/40">{res.resolutionNumber} - {res.title}</DialogDescription>
                                 </DialogHeader>
-                                <div className="mt-4">
-                                  <ResolutionPreview
-                                    ref={previewRef}
-                                    form={form}
-                                    signaturePreview={signaturePreview}
-                                    stampPreview={stampPreview}
-                                    settingsForm={settingsForm}
-                                  />
+                                <div className="mt-4 overflow-x-auto">
+                                  <div className="flex justify-center">
+                                    <div style={{ transform: 'scale(0.82)', transformOrigin: 'top center', width: '794px' }}>
+                                      <ResolutionPreview
+                                        ref={previewRef}
+                                        form={form}
+                                        signaturePreview={signaturePreview}
+                                        stampPreview={stampPreview}
+                                        settingsForm={settingsForm}
+                                      />
+                                    </div>
+                                  </div>
                                   <div className="flex justify-end mt-4 gap-2">
                                     <Button onClick={() => generatePDF(res)} disabled={generatingPdf} className="bg-white text-black hover:bg-white/90 font-semibold gap-2">
                                       {generatingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileDown className="w-4 h-4" />}
@@ -1200,108 +1212,295 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
   const formattedDate = form.date ? new Date(form.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '';
 
   return (
-    <div ref={ref} className="bg-white text-black p-12 sm:p-16 max-w-[210mm] mx-auto font-serif" style={{ fontFamily: "'Georgia', 'Times New Roman', serif" }}>
-      <div className="text-center mb-8">
-        <div className="flex items-center justify-center mb-4">
-          <img src="/black94-logo.png" alt={companyName} className="h-16 w-auto object-contain" />
+    <div
+      ref={ref}
+      style={{
+        width: '794px',       /* A4 at 96dpi */
+        minHeight: '1123px',   /* A4 at 96dpi */
+        background: '#ffffff',
+        fontFamily: "'Georgia', 'Times New Roman', serif",
+        color: '#1a1a1a',
+        padding: '48px 56px',
+        boxSizing: 'border-box',
+        position: 'relative',
+        overflow: 'hidden',
+      }}
+    >
+      <div style={{
+        position: 'absolute',
+        top: 0, left: 0, right: 0,
+        height: '4px',
+        background: 'linear-gradient(90deg, #111111 0%, #333333 30%, #111111 60%, #333333 100%)',
+      }} />
+
+      <div style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        justifyContent: 'space-between',
+        paddingBottom: '14px',
+        marginBottom: '16px',
+        borderBottom: '2px solid #1a1a1a',
+      }}>
+        <div style={{ flexShrink: 0, marginRight: '20px' }}>
+          <img
+            src="/black94-logo.png"
+            alt={companyName}
+            style={{ height: '52px', width: 'auto', objectFit: 'contain' }}
+          />
         </div>
-        <div className="border-t-2 border-black pt-4">
-          <h1 className="text-2xl font-bold uppercase tracking-wider text-black">{companyName}</h1>
-          {legalName && <p className="text-xs text-gray-600 mt-1 italic">({constitution})</p>}
-          {gstin && <p className="text-xs text-gray-600 mt-1 tracking-wide">GSTIN: {gstin}</p>}
-          {address && <p className="text-xs text-gray-600 mt-1">{address}</p>}
+
+        <div style={{ textAlign: 'right', flex: 1 }}>
+          <h1 style={{
+            fontSize: '18px',
+            fontWeight: 'bold',
+            textTransform: 'uppercase',
+            letterSpacing: '2px',
+            color: '#111111',
+            margin: 0,
+            lineHeight: '1.3',
+          }}>
+            {companyName}
+          </h1>
+          {legalName && (
+            <p style={{
+              fontSize: '9px',
+              color: '#555555',
+              fontStyle: 'italic',
+              margin: '2px 0 0 0',
+              letterSpacing: '0.5px',
+            }}>
+              {legalName} ({constitution})
+            </p>
+          )}
+          {gstin && (
+            <p style={{
+              fontSize: '9px',
+              color: '#555555',
+              margin: '1px 0 0 0',
+              letterSpacing: '0.5px',
+            }}>
+              GSTIN: {gstin}
+            </p>
+          )}
+          {address && (
+            <p style={{
+              fontSize: '8px',
+              color: '#666666',
+              margin: '2px 0 0 0',
+              lineHeight: '1.4',
+              maxWidth: '380px',
+              marginLeft: 'auto',
+            }}>
+              {address}
+            </p>
+          )}
         </div>
       </div>
 
-      <div className="text-center mb-10">
-        <div className="inline-block border-2 border-black px-8 py-2">
-          <h2 className="text-xl font-bold uppercase tracking-[0.2em]">Board Resolution</h2>
+      <div style={{ textAlign: 'center', margin: '24px 0 28px 0' }}>
+        <div style={{
+          display: 'inline-block',
+          position: 'relative',
+          padding: '10px 48px',
+        }}>
+          <div style={{
+            position: 'absolute',
+            top: '50%', left: 0, right: 0,
+            height: '1px',
+            background: '#1a1a1a',
+          }} />
+          <h2 style={{
+            fontSize: '16px',
+            fontWeight: 'bold',
+            textTransform: 'uppercase',
+            letterSpacing: '4px',
+            color: '#111111',
+            position: 'relative',
+            backgroundColor: '#ffffff',
+            padding: '0 20px',
+            margin: 0,
+          }}>
+            Board Resolution
+          </h2>
         </div>
       </div>
 
-      <div className="flex justify-between items-start mb-8 text-sm">
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'flex-start',
+        marginBottom: '20px',
+        padding: '10px 0',
+        borderTop: '1px solid #e0e0e0',
+        borderBottom: '1px solid #e0e0e0',
+      }}>
         <div>
-          <p className="font-semibold text-black">Resolution No:</p>
-          <p className="font-mono">{form.resolutionNumber}</p>
+          <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Resolution No</span>
+          <p style={{ fontSize: '12px', fontFamily: "'Courier New', monospace", fontWeight: 'bold', color: '#111111', margin: '2px 0 0 0' }}>{form.resolutionNumber}</p>
         </div>
-        <div className="text-right">
-          <p className="font-semibold text-black">Date:</p>
-          <p>{formattedDate}</p>
+        <div style={{ textAlign: 'center' }}>
+          {form.venue && (
+            <>
+              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Venue</span>
+              <p style={{ fontSize: '11px', color: '#333333', margin: '2px 0 0 0' }}>{form.venue}</p>
+            </>
+          )}
+        </div>
+        <div style={{ textAlign: 'right' }}>
+          <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Date</span>
+          <p style={{ fontSize: '11px', color: '#333333', margin: '2px 0 0 0' }}>{formattedDate}</p>
         </div>
       </div>
-
-      {form.venue && (
-        <div className="mb-6 text-sm">
-          <p className="font-semibold text-black">Venue:</p>
-          <p>{form.venue}</p>
-        </div>
-      )}
 
       {form.preamble && (
-        <div className="mb-6 text-sm leading-relaxed">
-          <p className="mb-2 italic text-gray-700">{form.preamble}</p>
+        <div style={{ marginBottom: '20px' }}>
+          <p style={{
+            fontSize: '11px',
+            lineHeight: '1.7',
+            color: '#444444',
+            fontStyle: 'italic',
+            textAlign: 'justify',
+            margin: 0,
+          }}>
+            {form.preamble}
+          </p>
         </div>
       )}
 
-      <div className="mb-10">
-        <p className="text-sm font-bold mb-2">&quot;RESOLVED THAT&quot;</p>
-        <div className="text-sm leading-[1.8] text-gray-800 pl-4 border-l-2 border-gray-300">
-          <p>{form.resolvedText}</p>
+      <div style={{ marginBottom: '24px' }}>
+        <p style={{
+          fontSize: '11px',
+          fontWeight: 'bold',
+          color: '#111111',
+          margin: '0 0 10px 0',
+          textTransform: 'uppercase',
+          letterSpacing: '1px',
+        }}>
+          Resolved That
+        </p>
+        <div style={{
+          fontSize: '11px',
+          lineHeight: '1.8',
+          color: '#222222',
+          textAlign: 'justify',
+          paddingLeft: '16px',
+          borderLeft: '3px solid #1a1a1a',
+        }}>
+          <p style={{ margin: 0 }}>{form.resolvedText}</p>
         </div>
       </div>
 
       {(form.resolvedBy || form.secondedBy) && (
-        <div className="mb-10 flex gap-12 text-sm">
+        <div style={{
+          display: 'flex',
+          gap: '48px',
+          marginBottom: '32px',
+        }}>
           {form.resolvedBy && (
             <div>
-              <p className="font-semibold text-black">Proposed By:</p>
-              <p>{form.resolvedBy}</p>
+              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Proposed By</span>
+              <p style={{ fontSize: '11px', color: '#111111', margin: '2px 0 0 0', fontWeight: '500' }}>{form.resolvedBy}</p>
             </div>
           )}
           {form.secondedBy && (
             <div>
-              <p className="font-semibold text-black">Seconded By:</p>
-              <p>{form.secondedBy}</p>
+              <span style={{ fontSize: '9px', textTransform: 'uppercase', letterSpacing: '1px', color: '#888888', fontWeight: 'bold' }}>Seconded By</span>
+              <p style={{ fontSize: '11px', color: '#111111', margin: '2px 0 0 0', fontWeight: '500' }}>{form.secondedBy}</p>
             </div>
           )}
         </div>
       )}
 
-      <div className="border-t border-gray-300 my-10" />
+      <div style={{ borderTop: '1px solid #d0d0d0', margin: '12px 0 0 0' }} />
 
-      <div className="relative mt-16">
-        <div className="flex items-end justify-between">
-          <div className="text-center">
-            {signaturePreview && (
-              <div className="mb-2">
-                <img src={signaturePreview} alt="Authorized Signature" className="h-16 w-auto mx-auto object-contain" />
-              </div>
-            )}
-            <div className="border-t border-black pt-2 min-w-[200px]">
-              <p className="font-semibold text-sm text-black">{form.authorityName || settingsForm.authorityName || '___________________________'}</p>
-              <p className="text-xs text-gray-600">{form.authorityTitle || settingsForm.authorityTitle || 'Authorized Signatory'}</p>
-              <p className="text-xs text-gray-600">{companyName}</p>
+      <div style={{
+        position: 'relative',
+        marginTop: '60px',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'space-between',
+      }}>
+        <div style={{ textAlign: 'center', minWidth: '220px' }}>
+          {signaturePreview && (
+            <div style={{ marginBottom: '4px' }}>
+              <img
+                src={signaturePreview}
+                alt="Authorized Signature"
+                style={{ height: '48px', width: 'auto', margin: '0 auto', objectFit: 'contain' }}
+              />
             </div>
+          )}
+          <div style={{ borderTop: '1.5px solid #1a1a1a', paddingTop: '6px' }}>
+            <p style={{
+              fontSize: '11px',
+              fontWeight: 'bold',
+              color: '#111111',
+              margin: 0,
+            }}>
+              {form.authorityName || settingsForm.authorityName || '___________________________'}
+            </p>
+            <p style={{
+              fontSize: '9px',
+              color: '#555555',
+              margin: '2px 0 0 0',
+            }}>
+              {form.authorityTitle || settingsForm.authorityTitle || 'Authorized Signatory'}
+            </p>
+            <p style={{
+              fontSize: '9px',
+              color: '#555555',
+              margin: '1px 0 0 0',
+            }}>
+              {companyName}
+            </p>
           </div>
+        </div>
 
-          <div className="relative">
-            {stampPreview && (
-              <div className="absolute -top-8 -right-8 opacity-70">
-                <img src={stampPreview} alt="Company Stamp" className="h-24 w-auto object-contain" style={{ transform: 'rotate(-12deg)' }} />
-              </div>
-            )}
-          </div>
+        <div style={{ position: 'relative', width: '120px', height: '120px', flexShrink: 0 }}>
+          {stampPreview && (
+            <img
+              src={stampPreview}
+              alt="Company Stamp"
+              style={{
+                position: 'absolute',
+                top: '-20px',
+                right: '-20px',
+                height: '100px',
+                width: 'auto',
+                objectFit: 'contain',
+                opacity: 0.75,
+                transform: 'rotate(-12deg)',
+              }}
+            />
+          )}
         </div>
       </div>
 
-      <div className="mt-16 pt-6 border-t border-gray-200 text-center">
-        <p className="text-[9px] text-gray-400 tracking-wide">
-          This is a computer-generated Board Resolution document of {companyName}.
-        </p>
-        <p className="text-[9px] text-gray-400 tracking-wide mt-0.5">
-          Generated on {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}
+      <div style={{
+        position: 'absolute',
+        bottom: '28px',
+        left: '56px',
+        right: '56px',
+        borderTop: '1px solid #e0e0e0',
+        paddingTop: '8px',
+        textAlign: 'center',
+      }}>
+        <p style={{
+          fontSize: '7px',
+          color: '#aaaaaa',
+          letterSpacing: '0.5px',
+          margin: 0,
+        }}>
+          This is a computer-generated Board Resolution document of {companyName}. Generated on {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}.
         </p>
       </div>
+
+      <div style={{
+        position: 'absolute',
+        bottom: 0, left: 0, right: 0,
+        height: '3px',
+        background: 'linear-gradient(90deg, #111111 0%, #333333 30%, #111111 60%, #333333 100%)',
+      }} />
     </div>
   );
 });
