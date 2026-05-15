@@ -138,91 +138,38 @@ interface ParsedResolution {
 }
 
 async function aiGenerateResolution(input: string, settings: CompanySettings): Promise<ParsedResolution> {
-  const zaiBaseUrl = 'http://172.25.136.193:8080/v1';
-  const zaiApiKey = 'Z.ai';
-  const zaiChatId = 'chat-b4f988d9-5c53-442d-a7d0-d35f298aed5e';
-  const zaiToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiODFiYzk5MDEtOWViNy00MjQzLThjNTktYjM5NDZjOTExMzJjIiwiY2hhdF9pZCI6ImNoYXQtYjRmOTg4ZDktNWM1My00NDJkLWE3ZDAtZDM1ZjI5OGFlZDVlIiwicGxhdGZvcm0iOiJ6YWkifQ.IytFiB5-1fkJudWFGEhaI4Sf1BiZYZCaUxWJUzino08';
-  const zaiUserId = '81bc9901-9eb7-4243-8c59-b3946c91132c';
-
-  const systemPrompt = `You are an expert legal document writer specializing in Indian Board Resolutions for proprietorship firms. Your task is to convert a plain English description into a professional, legally-formatted board resolution.
-
-COMPANY DETAILS:
-- Company Name: ${settings.companyName}
-- Legal Name: ${settings.legalName}
-- Constitution: ${settings.constitution}
-- GSTIN: ${settings.gstin}
-- Address: ${settings.address}
-- State: ${settings.state}
-- District: ${settings.district}
-- Authority/Proprietor: ${settings.authorityName}
-- Designation: ${settings.authorityTitle}
-
-You MUST respond with ONLY valid JSON (no markdown, no code blocks, no extra text). The JSON must have exactly these fields:
-{
-  "title": "A concise, professional title in Title Case (e.g., 'Opening of Current Bank Account with State Bank of India')",
-  "preamble": "A WHEREAS clause explaining the background/reason (e.g., 'WHEREAS, the Company requires a bank account for its day-to-day business operations and financial transactions;')",
-  "resolvedText": "The full RESOLVED THAT text with formal legal language. Write 3-5 detailed sentences. Start with 'RESOLVED THAT,' and include specific details like bank names, amounts, people, dates, account types, etc. from the description. Use formal corporate language.",
-  "venue": "Meeting venue (default: 'Registered Office, ${settings.district}' unless specified)",
-  "resolvedBy": "Name of the person who proposed (extract from description, or use '${settings.authorityName}')",
-  "secondedBy": "Name of the person who seconded (extract if mentioned, otherwise empty string '')",
-  "authorityName": "${settings.authorityName}",
-  "authorityTitle": "${settings.authorityTitle}"
-}
-
-RULES:
-1. Extract ALL specific details from the description (names, bank names, amounts, dates, account types, IFSC codes, etc.)
-2. Write the preamble as a single WHEREAS sentence with proper context
-3. The resolvedText must be comprehensive - include all specifics mentioned in the description
-4. Use formal legal language: "hereby approves", "subject to applicable laws", "as may be deemed necessary"
-5. Keep the title concise but descriptive (under 15 words)
-6. The resolvedText should start with "RESOLVED THAT," and be 3-5 well-crafted sentences
-7. If proposer/seconder names are mentioned, extract them; if not, proposer defaults to authority
-8. Output ONLY raw JSON, no markdown formatting`;
+  const cloudFunctionUrl = 'https://asia-south1-black94-board-resolutions.cloudfunctions.net/aiHandler';
 
   try {
-    const response = await fetch(`${zaiBaseUrl}/chat/completions`, {
+    const response = await fetch(cloudFunctionUrl, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${zaiApiKey}`,
-        'X-Z-AI-From': 'Z',
-        'X-Chat-Id': zaiChatId,
-        'X-User-Id': zaiUserId,
-        'X-Token': zaiToken,
-      },
-      body: JSON.stringify({
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Convert this description into a professional board resolution:\n\n${input}` }
-        ],
-        temperature: 0.3,
-        max_tokens: 2000,
-        thinking: { type: 'disabled' },
-      }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: input, settings }),
     });
 
     if (!response.ok) {
-      throw new Error(`API error: ${response.status}`);
+      const errBody = await response.text().catch(() => '');
+      throw new Error(`Cloud Function error ${response.status}: ${errBody}`);
     }
 
     const data = await response.json();
-    const content = data.choices?.[0]?.message?.content || '';
 
-    const cleaned = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-    const parsed = JSON.parse(cleaned);
+    if (data.error) {
+      throw new Error(data.error);
+    }
 
     return {
-      title: parsed.title || '',
-      preamble: parsed.preamble || '',
-      resolvedText: parsed.resolvedText || '',
-      venue: parsed.venue || `Registered Office, ${settings.district}`,
-      resolvedBy: parsed.resolvedBy || settings.authorityName,
-      secondedBy: parsed.secondedBy || '',
-      authorityName: parsed.authorityName || settings.authorityName,
-      authorityTitle: parsed.authorityTitle || settings.authorityTitle,
+      title: data.title || '',
+      preamble: data.preamble || '',
+      resolvedText: data.resolvedText || '',
+      venue: data.venue || `Registered Office, ${settings.district}`,
+      resolvedBy: data.resolvedBy || settings.authorityName,
+      secondedBy: data.secondedBy || '',
+      authorityName: data.authorityName || settings.authorityName,
+      authorityTitle: data.authorityTitle || settings.authorityTitle,
     };
   } catch (err) {
-    console.warn('AI service unavailable, using smart parser:', err);
+    console.warn('AI Cloud Function unavailable, using smart parser:', err);
     return smartParseDescription(input, settings);
   }
 }
