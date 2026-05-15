@@ -1375,7 +1375,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         background: '#ffffff',
         fontFamily: "'Georgia', 'Times New Roman', serif",
         color: '#1a1a1a',
-        padding: '48px 56px',
+        padding: '36px 56px 24px 56px',
         boxSizing: 'border-box',
         position: 'relative',
         overflow: 'hidden',
@@ -1457,40 +1457,14 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         }} />
       </div>
 
-      <div style={{ textAlign: 'center', margin: '24px 0 28px 0' }}>
-        <div style={{
-          display: 'inline-block',
-          position: 'relative',
-          padding: '10px 48px',
-        }}>
-          <div style={{
-            position: 'absolute',
-            top: '50%', left: 0, right: 0,
-            height: '1px',
-            background: '#1a1a1a',
-          }} />
-          <h2 style={{
-            fontSize: '16px',
-            fontWeight: 'bold',
-            textTransform: 'uppercase',
-            letterSpacing: '4px',
-            color: '#111111',
-            position: 'relative',
-            backgroundColor: '#ffffff',
-            padding: '0 20px',
-            margin: 0,
-          }}>
-            Board Resolution
-          </h2>
-        </div>
-      </div>
+      {/* Title is in the black header now — no separate title needed */}
 
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'flex-start',
-        marginBottom: '20px',
-        padding: '10px 0',
+        marginBottom: '14px',
+        padding: '8px 0',
         borderTop: '1px solid #e0e0e0',
         borderBottom: '1px solid #e0e0e0',
       }}>
@@ -1513,10 +1487,10 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
       </div>
 
       {form.preamble && (
-        <div style={{ marginBottom: '20px' }}>
+        <div style={{ marginBottom: '14px' }}>
           <p style={{
-            fontSize: '11px',
-            lineHeight: '1.7',
+            fontSize: '10.5px',
+            lineHeight: '1.6',
             color: '#444444',
             fontStyle: 'italic',
             textAlign: 'justify',
@@ -1527,20 +1501,20 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       )}
 
-      <div style={{ marginBottom: '24px' }}>
+      <div style={{ marginBottom: '16px' }}>
         <p style={{
-          fontSize: '11px',
+          fontSize: '10.5px',
           fontWeight: 'bold',
           color: '#111111',
-          margin: '0 0 10px 0',
+          margin: '0 0 6px 0',
           textTransform: 'uppercase',
           letterSpacing: '1px',
         }}>
           Resolved That
         </p>
         <div style={{
-          fontSize: '11px',
-          lineHeight: '1.8',
+          fontSize: '10.5px',
+          lineHeight: '1.65',
           color: '#222222',
           textAlign: 'justify',
           paddingLeft: '16px',
@@ -1554,7 +1528,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         <div style={{
           display: 'flex',
           gap: '48px',
-          marginBottom: '32px',
+          marginBottom: '20px',
         }}>
           {form.resolvedBy && (
             <div>
@@ -1575,7 +1549,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
 
       <div style={{
         position: 'relative',
-        marginTop: '60px',
+        marginTop: '40px',
         display: 'flex',
         alignItems: 'flex-end',
         justifyContent: 'space-between',
@@ -1636,24 +1610,7 @@ const ResolutionPreview = React.forwardRef<HTMLDivElement, {
         </div>
       </div>
 
-      <div style={{
-        position: 'absolute',
-        bottom: '28px',
-        left: '56px',
-        right: '56px',
-        borderTop: '1px solid #e0e0e0',
-        paddingTop: '8px',
-        textAlign: 'center',
-      }}>
-        <p style={{
-          fontSize: '7px',
-          color: '#aaaaaa',
-          letterSpacing: '0.5px',
-          margin: 0,
-        }}>
-          This is a computer-generated Board Resolution document of {companyName}. Generated on {new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}.
-        </p>
-      </div>
+
 
       <div style={{
         position: 'absolute',
