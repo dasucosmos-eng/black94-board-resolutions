@@ -1,0 +1,11 @@
+{
+  "name": "black94-resolutions-functions",
+  "version": "1.0.0",
+  "private": true,
+  "main": "index.js",
+  "type": "module",
+  "dependencies": {
+    "firebase-functions": "^6.0.0",
+    "z-ai-web-dev-sdk": "^0.0.17"
+  }
+}

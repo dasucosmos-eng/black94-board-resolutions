@@ -125,7 +125,7 @@ async function hashPassword(password: string): Promise<string> {
   return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-// --- Smart Resolution Parser ---
+// --- AI Smart Resolution Builder ---
 interface ParsedResolution {
   title: string;
   preamble: string;
@@ -137,71 +137,164 @@ interface ParsedResolution {
   authorityTitle: string;
 }
 
-function parseSmartDescription(input: string, settings: CompanySettings): ParsedResolution {
-  const lines = input.trim().split('\n').map(l => l.trim()).filter(Boolean);
+async function aiGenerateResolution(input: string, settings: CompanySettings): Promise<ParsedResolution> {
+  const functionUrl = 'https://asia-south1-black94-board-resolutions.cloudfunctions.net/aiHandler';
+
+  try {
+    const response = await fetch(functionUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: input, settings }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`API error: ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    return {
+      title: data.title || '',
+      preamble: data.preamble || '',
+      resolvedText: data.resolvedText || '',
+      venue: data.venue || `Registered Office, ${settings.district}`,
+      resolvedBy: data.resolvedBy || '',
+      secondedBy: data.secondedBy || '',
+      authorityName: data.authorityName || settings.authorityName,
+      authorityTitle: data.authorityTitle || settings.authorityTitle,
+    };
+  } catch (err) {
+    console.warn('AI service unavailable, using smart parser:', err.message);
+    return smartParseDescription(input, settings);
+  }
+}
+
+// --- Smart Resolution Parser (fallback) ---
+function smartParseDescription(input: string, settings: CompanySettings): ParsedResolution {
+  const text = input.trim();
   const result: ParsedResolution = {
     title: '',
     preamble: '',
     resolvedText: '',
-    venue: settings.address ? 'Registered Office, ' + settings.district : '',
+    venue: `Registered Office, ${settings.district}`,
     resolvedBy: '',
     secondedBy: '',
     authorityName: settings.authorityName,
     authorityTitle: settings.authorityTitle,
   };
 
-  let resolvedLines: string[] = [];
-  let preambleLines: string[] = [];
-  let inResolvedSection = false;
-  let titleExtracted = false;
+  // Extract proposed by / seconded by
+  const proposedMatch = text.match(/(?:proposed\s*by|proposer)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
+  const secondedMatch = text.match(/(?:seconded\s*by|seconder)[:\s]+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/i);
+  if (proposedMatch) result.resolvedBy = proposedMatch[1].trim();
+  if (secondedMatch) result.secondedBy = secondedMatch[1].trim();
 
-  for (const line of lines) {
-    const upperLine = line.toUpperCase();
+  // Clean text (remove extracted fields)
+  let cleanText = text
+    .replace(/(?:proposed\s*by|proposer)[:\s]+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/gi, '')
+    .replace(/(?:seconded\s*by|seconder)[:\s]+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*/gi, '')
+    .replace(/(?:resolution\s*(?:for|regarding|to|about)\s*[:\-]?\s*)/gi, '')
+    .trim();
 
-    // Detect title patterns
-    if (!titleExtracted && (
-      /^(?:resolution\s+(?:for|regarding|to|about)\s*[:\-])/i.test(line) ||
-      /^(?:appointment|approval|authorization|allotment|opening|closing|adoption|acceptance|ratification|amendment|alteration|change|creation|establishment|issuance|transfer|removal|reduction|increase|conversion|renewal|termination|dissolution|winding|merger|demerger|acquisition|disposal|investment|borrowing|loan|mortgage|charge|debenture|share|dividend|bonus|right|split|buyback|esop|compensation|reimbursement|remuneration|salary|payment|settlement|agreement|contract|partnership|joint\s*venture|subsidiary|branch|bank\s*account|auditor|director|managing\s*director|ceo|cfo|company\s*secretary|chairman|committee|board\s*meeting|annual\s*general\s*meeting|extra\s*ordinary|budget|financial\s*year|capital|fund|reserve|provision|write\s*off|write\s*back|revaluation|impairment|depreciation|grant|donation|contribution|gift|loan\s*to|guarantee|security|indemnity|insurance|litigation|arbitration|suo\s*moto|inspection|investigation|compliance|filing|registration|incorporation|deregistration|strike\s*off|dormant|revival|restoration)/i.test(line)
-    )) {
-      result.title = line.replace(/^(?:resolution\s+(?:for|regarding|to|about)\s*[:\-]\s*)/i, '').replace(/^["'\s]+|["'\s]+$/g, '');
-      titleExtracted = true;
-      continue;
-    }
+  const lines = cleanText.split(/[.\n]+/).map(l => l.trim()).filter(l => l.length > 5);
+  if (lines.length === 0) {
+    result.title = 'Board Resolution';
+    result.resolvedText = text.trim();
+    return result;
+  }
 
-    // First line is usually the title if no pattern matched
-    if (!titleExtracted && !inResolvedSection) {
-      result.title = line.replace(/^["'\s]+|["'\s]+$/g, '');
-      titleExtracted = true;
-      continue;
-    }
+  // Extract title from first meaningful line
+  const titleLine = lines[0];
+  result.title = titleLine
+    .replace(/^(?:the\s+)?(?:board\s+(?:hereby\s+)?)?(?:hereby\s+)?(?:it\s+is\s+)?/i, '')
+    .replace(/^(?:we\s+(?:want\s+to|need\s+to|should|shall)\s+)/i, '')
+    .replace(/^(?:i\s+(?:want|need)\s+to\s+)/i, '')
+    .replace(/^(?:please|kindly)\s+/i, '')
+    .replace(/\s+and\s+.*$/s, '')
+    .trim();
+  result.title = result.title
+    .split(/\s+/)
+    .map((w: string, i: number) => i === 0 ? w.charAt(0).toUpperCase() + w.slice(1).toLowerCase() : (w.length > 3 ? w.toLowerCase() : w.toLowerCase()))
+    .join(' ');
+  // Capitalize important words
+  const importantWords = ['appointment', 'approval', 'authorization', 'opening', 'closing', 'bank', 'account', 'director', 'managing', 'annual', 'budget', 'payment', 'salary', 'transfer', 'allotment', 'creation', 'issuance', 'removal', 'change', 'adoption', 'ratification', 'amendment', 'resolution'];
+  result.title = result.title.replace(/\b(\w+)/g, (match: string) => importantWords.includes(match.toLowerCase()) ? match.charAt(0).toUpperCase() + match.slice(1).toLowerCase() : match);
 
-    // Detect "RESOLVED THAT" section
-    if (/^(?:resolved|it\s+is\s+hereby\s+resolved|it\s+is\s+resolved)/i.test(line)) {
-      inResolvedSection = true;
-      const cleaned = line.replace(/^resolved\s+that\s*/i, '').replace(/^it\s+is\s+hereby\s+resolved\s+that\s*/i, '');
-      if (cleaned) resolvedLines.push(cleaned);
-      continue;
-    }
+  // Build body from remaining lines
+  const bodyLines = lines.slice(1).filter((l: string) => l.trim().length > 5);
+  const fullBody = bodyLines.length > 0 ? bodyLines.join('. ').trim() : (lines.length > 1 ? lines.slice(1).join('. ').trim() : cleanText.replace(lines[0], '').trim());
 
-    if (inResolvedSection) {
-      resolvedLines.push(line);
+  // Generate preamble based on title keywords
+  const titleLower = result.title.toLowerCase();
+  let preambleTemplate = '';
+  if (/bank\s*account|current\s*account|savings\s*account/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, the ${settings.companyName} requires a bank account for its day-to-day business operations and financial transactions;`;
+  } else if (/appointment|appoint|director|managing/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, it is considered necessary and expedient to appoint a suitable person to the position for the efficient management and growth of ${settings.companyName};`;
+  } else if (/budget|financial|annual/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, the Board of ${settings.companyName} deems it necessary to approve the financial estimates for the smooth operations of the business during the ensuing financial year;`;
+  } else if (/payment|salary|remuneration|compensation/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, it is considered appropriate to approve the payment of remuneration for the services rendered to ${settings.companyName};`;
+  } else if (/loan|borrowing|mortgage|charge/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, ${settings.companyName} requires financial assistance for its business operations and it is deemed necessary to avail the said facility;`;
+  } else if (/transfer|allotment|share|equity/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, it is considered expedient to undertake the transfer of shares in the interest of the business and its stakeholders;`;
+  } else if (/opening|close|closing|branch|office/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, it is considered beneficial for the business expansion of ${settings.companyName} to undertake the said activity;`;
+  } else if (/agreement|contract|partnership|mou|memorandum/.test(titleLower)) {
+    preambleTemplate = `WHEREAS, it is considered necessary in the interest of ${settings.companyName} to enter into the said arrangement for the furtherance of its business objectives;`;
+  } else {
+    preambleTemplate = `WHEREAS, it is considered necessary and in the best interest of ${settings.companyName} to undertake the said action for the efficient conduct of its business affairs;`;
+  }
+  result.preamble = preambleTemplate;
+
+  // Build professional resolved text
+  if (fullBody.length > 0) {
+    const polished = fullBody
+      .replace(/^(?:we\s+(?:want|need|should|shall|have\s+decided)\s+to)/gi, 'the Board hereby resolves to')
+      .replace(/^(?:the\s+)?board\s+(?:hereby\s+)?/gi, '')
+      .replace(/^(?:it\s+is\s+)?hereby\s+(?:resolved|approved|decided)\s+that/gi, '')
+      .replace(/^(?:i\s+(?:want|need)\s+to)/gi, '')
+      .replace(/^(?:please|kindly)\s+/gi, '')
+      .replace(/\bi\s+(?:will|shall|want|need)\s+/gi, 'the Company shall ')
+      .replace(/\bwe\s+(?:will|shall|want|need)\s+/gi, 'the Board shall ')
+      .replace(/\bfor\s+our\s+/gi, `for ${settings.companyName} `)
+      .replace(/\bour\s+business/gi, `the business of ${settings.companyName}`)
+      .replace(/\bour\s+company/gi, settings.companyName)
+      .replace(/\bmy\s+company/gi, settings.companyName)
+      .replace(/\bthe\s+account\s+(?:will|shall)\s+be\s+operated\s+by/gi, 'the account shall be jointly operated by');
+
+    const sentences = polished.split(/(?<=[.!?])\s+/).filter((s: string) => s.trim().length > 0);
+    const formalSentences = sentences.map((s: string) => {
+      s = s.trim();
+      if (!s) return '';
+      s = s.charAt(0).toUpperCase() + s.slice(1);
+      if (!/[.!?]$/.test(s)) s += '.';
+      return s;
+    }).filter(Boolean);
+
+    if (formalSentences.length > 0) {
+      // Smart opening based on action type
+      let opening = '';
+      if (/open|create|establish|setup/.test(titleLower)) {
+        opening = `RESOLVED THAT, subject to the necessary approvals and compliance with applicable laws, ${settings.companyName} shall `;
+      } else if (/appoint|designate/.test(titleLower)) {
+        opening = 'RESOLVED THAT, the appointment of ';
+      } else if (/approve|sanction|accept/.test(titleLower)) {
+        opening = 'RESOLVED THAT, the Board hereby approves and ratifies ';
+      } else if (/transfer|allot|issue/.test(titleLower)) {
+        opening = 'RESOLVED THAT, the Board hereby authorizes ';
+      } else {
+        opening = `RESOLVED THAT, the Board of ${settings.companyName} hereby `;
+      }
+      const firstSentence = formalSentences[0].replace(/^[A-Z]/, (c: string) => c.toLowerCase());
+      formalSentences[0] = opening + firstSentence;
+      result.resolvedText = formalSentences.join(' ');
     } else {
-      preambleLines.push(line);
+      result.resolvedText = `RESOLVED THAT, the Board of ${settings.companyName} hereby approves and authorizes the ${result.title.toLowerCase()} as described herein.`;
     }
-  }
-
-  // If no "RESOLVED THAT" section found, treat everything after title as resolved text
-  if (!inResolvedSection && preambleLines.length > 0) {
-    resolvedLines = preambleLines;
-    preambleLines = [];
-  }
-
-  result.preamble = preambleLines.join(' ').trim();
-  result.resolvedText = resolvedLines.join(' ').trim();
-
-  // Ensure title is capitalized properly
-  if (result.title) {
-    result.title = result.title.charAt(0).toUpperCase() + result.title.slice(1);
+  } else {
+    result.resolvedText = `RESOLVED THAT, the Board of ${settings.companyName} hereby approves and authorizes the ${result.title.toLowerCase()} as set forth in the description provided.`;
   }
 
   return result;
@@ -335,6 +428,7 @@ export default function BoardResolutionApp() {
 
   const [settingsForm, setSettingsForm] = useState<CompanySettings>(DEFAULT_SETTINGS);
   const [smartDescription, setSmartDescription] = useState('');
+  const [smartLoading, setSmartLoading] = useState(false);
 
   const [signaturePreview, setSignaturePreview] = useState<string | null>(null);
   const [stampPreview, setStampPreview] = useState<string | null>(null);
@@ -390,30 +484,37 @@ export default function BoardResolutionApp() {
     return `${prefix}/${count.toString().padStart(3, '0')}`;
   }, [resolutions]);
 
-  // Smart parse handler
-  const handleSmartParse = () => {
+  // AI Smart Resolution Builder
+  const handleSmartParse = async () => {
     if (!smartDescription.trim()) {
-      toast.error('Please enter a description to parse');
+      toast.error('Please enter a description to generate the resolution');
       return;
     }
+    setSmartLoading(true);
+    try {
+      const parsed = await aiGenerateResolution(smartDescription, settingsForm);
+      const nextNum = generateResolutionNumber();
 
-    const parsed = parseSmartDescription(smartDescription, settingsForm);
-    const nextNum = generateResolutionNumber();
+      setForm(prev => ({
+        ...prev,
+        resolutionNumber: nextNum,
+        title: parsed.title || prev.title,
+        preamble: parsed.preamble || prev.preamble,
+        resolvedText: parsed.resolvedText || prev.resolvedText,
+        venue: parsed.venue || prev.venue,
+        resolvedBy: parsed.resolvedBy || prev.resolvedBy,
+        secondedBy: parsed.secondedBy || prev.secondedBy,
+        authorityName: parsed.authorityName || prev.authorityName,
+        authorityTitle: parsed.authorityTitle || prev.authorityTitle,
+      }));
 
-    setForm(prev => ({
-      ...prev,
-      resolutionNumber: nextNum,
-      title: parsed.title || prev.title,
-      preamble: parsed.preamble || prev.preamble,
-      resolvedText: parsed.resolvedText || prev.resolvedText,
-      venue: parsed.venue || prev.venue,
-      resolvedBy: parsed.resolvedBy || prev.resolvedBy,
-      secondedBy: parsed.secondedBy || prev.secondedBy,
-      authorityName: parsed.authorityName || prev.authorityName,
-      authorityTitle: parsed.authorityTitle || prev.authorityTitle,
-    }));
-
-    toast.success('Resolution details populated from description!');
+      toast.success('AI generated a professional board resolution!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Failed to generate resolution. Please try again or fill fields manually.');
+    } finally {
+      setSmartLoading(false);
+    }
   };
 
   // Signature upload
@@ -648,12 +749,12 @@ export default function BoardResolutionApp() {
                   Smart Resolution Builder
                 </CardTitle>
                 <CardDescription className="text-white/40">
-                  Describe your resolution in plain English and the system will auto-fill all fields. You can still edit each field manually after.
+                  Describe your resolution in plain English. AI will write a professional board resolution with proper legal language and auto-fill all fields.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4 relative">
                 <Textarea
-                  placeholder={`Example:\nResolution for appointment of Mr. Rajesh Kumar as Managing Director\nThe board hereby approves the appointment based on his 15 years of experience\nSalary: INR 25,00,000 per annum\nProposed by: Suresh Reddy, Seconded by: Anitha Kumari`}
+                  placeholder={`Describe what the resolution is about in simple words.\n\nExample:\nWe want to open a current bank account with SBI for our business. The account will be operated by Prabhu Dasu Palli. Proposed by him only.`}
                   value={smartDescription}
                   onChange={(e) => setSmartDescription(e.target.value)}
                   className="bg-white/5 border-white/10 text-white placeholder:text-white/20 focus:border-white/25 focus:ring-white/10 min-h-[100px] resize-y text-sm leading-relaxed"
@@ -661,16 +762,16 @@ export default function BoardResolutionApp() {
                 <div className="flex items-center justify-between">
                   <p className="text-[11px] text-white/25 flex items-center gap-1">
                     <Wand2 className="w-3 h-3" />
-                    Include: title, resolved text, proposers, seconders for best results
+                    Just describe it naturally - AI handles the professional writing
                   </p>
                   <Button
                     onClick={handleSmartParse}
-                    disabled={!smartDescription.trim()}
+                    disabled={!smartDescription.trim() || smartLoading}
                     variant="outline"
                     className="border-amber-500/30 text-amber-400 hover:bg-amber-500/10 hover:text-amber-300 gap-2"
                   >
-                    <Sparkles className="w-4 h-4" />
-                    Auto-Fill Fields
+                    {smartLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+                    {smartLoading ? 'Generating...' : 'Generate Resolution'}
                   </Button>
                 </div>
               </CardContent>
