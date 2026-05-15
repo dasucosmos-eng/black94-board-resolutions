@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
-  FileText, Upload, Stamp, PenTool, Settings, Plus, Trash2, Download, Eye, Copy, CheckCircle2, Building2, Calendar, MapPin, User, AlertCircle, Loader2, ExternalLink, FileDown, Lock, Shield, LogOut, Sparkles, Wand2, ChevronRight, KeyRound
+  FileText, Upload, Stamp, PenTool, Settings, Plus, Trash2, Download, Eye, Copy, CheckCircle2, Building2, Calendar, MapPin, User, AlertCircle, Loader2, ExternalLink, FileDown, Lock, Shield, LogOut, Sparkles, Wand2, ChevronRight
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -105,6 +105,18 @@ const DEFAULT_SETTINGS: CompanySettings = {
 };
 
 // --- Password Hash (simple but effective for static site) ---
+let _computedHash: string | null = null;
+
+async function getOwnerPasswordHash(): Promise<string> {
+  if (_computedHash) return _computedHash;
+  const encoder = new TextEncoder();
+  const data = encoder.encode('11221122' + 'black94_salt_2025');
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  _computedHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+  return _computedHash;
+}
+
 async function hashPassword(password: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(password + 'black94_salt_2025');
@@ -200,17 +212,7 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
-  const [showSetup, setShowSetup] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    try {
-      const existingHash = localStorage.getItem('black94_pwd_hash');
-      return !existingHash;
-    } catch {
-      return false;
-    }
-  });
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
+  const [shake, setShake] = useState(false);
 
   const handleLogin = async () => {
     if (!password.trim()) {
@@ -218,47 +220,28 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
       return;
     }
     setLoading(true);
-    const hash = await hashPassword(password);
-    const storedHash = getFromStorage<string | null>('black94_pwd_hash', null);
+    const ownerHash = await getOwnerPasswordHash();
+    const inputHash = await hashPassword(password);
 
-    if (hash === storedHash) {
+    if (inputHash === ownerHash) {
       setToStorage('black94_auth', { authenticated: true, timestamp: Date.now() });
-      toast.success('Welcome to Black94 Board Resolution System');
+ toast.success('Welcome back to Black94 Board Resolution System');
       onLogin();
     } else {
-      setError('Incorrect password');
+      setError('Incorrect password. Access denied.');
+      setShake(true);
+      setTimeout(() => setShake(false), 500);
     }
-    setLoading(false);
-  };
-
-  const handleSetup = async () => {
-    if (!newPassword.trim() || newPassword.length < 4) {
-      setError('Password must be at least 4 characters');
-      return;
-    }
-    if (newPassword !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-    setLoading(true);
-    const hash = await hashPassword(newPassword);
-    setToStorage('black94_pwd_hash', hash);
-    setToStorage('black94_auth', { authenticated: true, timestamp: Date.now() });
-    toast.success('Password set successfully! Welcome to Black94 Board Resolution System');
-    onLogin();
     setLoading(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      if (showSetup) handleSetup();
-      else handleLogin();
-    }
+    if (e.key === 'Enter') handleLogin();
   };
 
   return (
     <div className="min-h-screen bg-[#0a0a0a] flex items-center justify-center p-4">
-      <div className="w-full max-w-md">
+      <div className={`w-full max-w-md transition-transform ${shake ? 'animate-[shake_0.5s_ease-in-out]' : ''}`}>
         {/* Logo */}
         <div className="text-center mb-8">
           <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-white/10 to-white/5 border border-white/10 mx-auto mb-4 flex items-center justify-center overflow-hidden">
@@ -271,56 +254,27 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
         <Card className="bg-white/[0.03] border-white/10 backdrop-blur-sm">
           <CardHeader className="text-center pb-2">
             <div className="mx-auto w-12 h-12 rounded-full bg-white/5 border border-white/10 flex items-center justify-center mb-3">
-              {showSetup ? <KeyRound className="w-6 h-6 text-white/60" /> : <Lock className="w-6 h-6 text-white/60" />}
+              <Lock className="w-6 h-6 text-white/60" />
             </div>
-            <CardTitle className="text-white text-lg">
-              {showSetup ? 'Set Your Password' : 'Access Control'}
-            </CardTitle>
+            <CardTitle className="text-white text-lg">Access Control</CardTitle>
             <CardDescription className="text-white/40">
-              {showSetup
-                ? 'Create a password to secure your board resolution system'
-                : 'Enter your password to access the system'}
+              This system is restricted to authorized personnel only.
+              <br />Enter your access password to continue.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4 pt-2">
-            {showSetup ? (
-              <>
-                <div className="space-y-2">
-                  <Label className="text-white/70 text-sm font-medium">New Password</Label>
-                  <Input
-                    type="password"
-                    placeholder="Minimum 4 characters"
-                    value={newPassword}
-                    onChange={(e) => { setNewPassword(e.target.value); setError(''); }}
-                    onKeyDown={handleKeyDown}
-                    className="bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-white/25 focus:ring-white/10"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-white/70 text-sm font-medium">Confirm Password</Label>
-                  <Input
-                    type="password"
-                    placeholder="Re-enter password"
-                    value={confirmPassword}
-                    onChange={(e) => { setConfirmPassword(e.target.value); setError(''); }}
-                    onKeyDown={handleKeyDown}
-                    className="bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-white/25 focus:ring-white/10"
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="space-y-2">
-                <Label className="text-white/70 text-sm font-medium">Password</Label>
-                <Input
-                  type="password"
-                  placeholder="Enter your password"
-                  value={password}
-                  onChange={(e) => { setPassword(e.target.value); setError(''); }}
-                  onKeyDown={handleKeyDown}
-                  className="bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-white/25 focus:ring-white/10"
-                />
-              </div>
-            )}
+            <div className="space-y-2">
+              <Label className="text-white/70 text-sm font-medium">Password</Label>
+              <Input
+                type="password"
+                placeholder="Enter access password"
+                value={password}
+                onChange={(e) => { setPassword(e.target.value); setError(''); }}
+                onKeyDown={handleKeyDown}
+                autoFocus
+                className="bg-white/5 border-white/10 text-white placeholder:text-white/25 focus:border-white/25 focus:ring-white/10"
+              />
+            </div>
 
             {error && (
               <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
@@ -330,19 +284,20 @@ function LoginPage({ onLogin }: { onLogin: () => void }) {
             )}
 
             <Button
-              onClick={showSetup ? handleSetup : handleLogin}
-              disabled={loading || (showSetup ? (!newPassword || !confirmPassword) : !password)}
+              onClick={handleLogin}
+              disabled={loading || !password}
               className="bg-white text-black hover:bg-white/90 font-semibold w-full gap-2"
             >
-              {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : showSetup ? (
-                <Shield className="w-4 h-4" />
-              ) : (
-                <Lock className="w-4 h-4" />
-              )}
-              {showSetup ? 'Set Password & Continue' : 'Unlock'}
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Lock className="w-4 h-4" />}
+              Unlock System
             </Button>
+
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <Shield className="w-3 h-3 text-white/20" />
+              <p className="text-[10px] text-white/20 text-center">
+                Private &amp; Confidential &middot; Black94 Proprietorship
+              </p>
+            </div>
           </CardContent>
         </Card>
 
